@@ -47,15 +47,21 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Read Agent version
+        id: version
+        run: |
+          VERSION=$(tr -d '\r\n' < VERSION)
+          printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
       - name: Build Linux Agent
         env:
           CGO_ENABLED: "0"
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           mkdir -p dist
           BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          VERSION=${GITHUB_SHA::12}
           go build -trimpath \
             -tags "with_quic with_utls with_wireguard with_acme with_clash_api" \
             -ldflags "-s -w -X main.version=${VERSION} -X main.buildTime=${BUILD_TIME}" \
@@ -88,6 +94,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          cp VERSION dist/agent-version.txt
           git tag --force latest "$GITHUB_SHA"
           git push origin refs/tags/latest --force
           if gh release view latest >/dev/null 2>&1; then
