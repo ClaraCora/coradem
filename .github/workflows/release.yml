@@ -95,7 +95,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp VERSION dist/agent-version.txt
+          VERSION=$(tr -d '\r\n' < VERSION)
+          printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'
+          printf '%s+%s\n' "$VERSION" "${GITHUB_SHA::12}" > dist/agent-version.txt
           git tag --force latest "$GITHUB_SHA"
           git push origin refs/tags/latest --force
           if gh release view latest >/dev/null 2>&1; then
