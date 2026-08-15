@@ -123,7 +123,7 @@ func TestNodeConfig_UnmarshalCustomSettingsSnakeCase(t *testing.T) {
 		"server_port": 111,
 		"custom_outbounds": [{"tag":"warp","protocol":"wireguard","settings":{"server":"1.1.1.1","server_port":2408}}],
 		"custom_routes": [{"domain":["keyword:raw"],"outbound":"warp"}],
-		"custom_route_rules": [{"name":"r1","match":{"domain_suffixes":["example.com"],"ip_cidrs":["1.1.1.0/24"]},"action":{"type":"route","target":"warp"}}]
+		"custom_route_rules": [{"name":"r1","match":{"domain_suffixes":["example.com"],"geo_ips":["google"],"ip_cidrs":["1.1.1.0/24"]},"action":{"type":"route","target":"warp"}}]
 	}`
 	var nc NodeConfig
 	if err := json.Unmarshal([]byte(input), &nc); err != nil {
@@ -135,7 +135,7 @@ func TestNodeConfig_UnmarshalCustomSettingsSnakeCase(t *testing.T) {
 	if len(nc.CustomRoutes) != 1 || nc.CustomRoutes[0]["outbound"] != "warp" {
 		t.Fatalf("custom_routes not decoded: %#v", nc.CustomRoutes)
 	}
-	if len(nc.CustomRouteRules) != 1 || nc.CustomRouteRules[0].Match.DomainSuffixes[0] != "example.com" || nc.CustomRouteRules[0].Match.IPCIDRs[0] != "1.1.1.0/24" {
+	if len(nc.CustomRouteRules) != 1 || nc.CustomRouteRules[0].Match.DomainSuffixes[0] != "example.com" || nc.CustomRouteRules[0].Match.GeoIPs[0] != "google" || nc.CustomRouteRules[0].Match.IPCIDRs[0] != "1.1.1.0/24" {
 		t.Fatalf("custom_route_rules not decoded: %#v", nc.CustomRouteRules)
 	}
 }
@@ -146,7 +146,7 @@ func TestNodeConfig_UnmarshalCustomSettingsCamelCase(t *testing.T) {
 		"server_port": 111,
 		"customOutbounds": [{"tag":"proxy","protocol":"socks","proxyTag":"warp","settings":{"server":"2.2.2.2","server_port":1080}}],
 		"customRoutes": [{"domain":["keyword:raw"],"outbound":"proxy"}],
-		"customRouteRules": [{"name":"r1","match":{"domainSuffixes":["example.com"],"ipCidrs":["1.1.1.0/24"],"sourceCidrs":["10.0.0.0/8"],"sourcePorts":["1000-2000"]},"action":{"type":"route","target":"proxy"}}]
+		"customRouteRules": [{"name":"r1","match":{"domainSuffixes":["example.com"],"geoIps":["google"],"ipCidrs":["1.1.1.0/24"],"sourceCidrs":["10.0.0.0/8"],"sourcePorts":["1000-2000"]},"action":{"type":"route","target":"proxy"}}]
 	}`
 	var nc NodeConfig
 	if err := json.Unmarshal([]byte(input), &nc); err != nil {
@@ -159,7 +159,7 @@ func TestNodeConfig_UnmarshalCustomSettingsCamelCase(t *testing.T) {
 		t.Fatalf("camel customRoutes not decoded: %#v", nc.CustomRoutes)
 	}
 	rule := nc.CustomRouteRules[0]
-	if rule.Match.DomainSuffixes[0] != "example.com" || rule.Match.IPCIDRs[0] != "1.1.1.0/24" || rule.Match.SourceCIDRs[0] != "10.0.0.0/8" || rule.Match.SourcePorts[0] != "1000-2000" {
+	if rule.Match.DomainSuffixes[0] != "example.com" || rule.Match.GeoIPs[0] != "google" || rule.Match.IPCIDRs[0] != "1.1.1.0/24" || rule.Match.SourceCIDRs[0] != "10.0.0.0/8" || rule.Match.SourcePorts[0] != "1000-2000" {
 		t.Fatalf("camel customRouteRules not decoded: %#v", nc.CustomRouteRules)
 	}
 }

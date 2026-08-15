@@ -22,6 +22,14 @@ func TestValidateCustomRouteRules(t *testing.T) {
 			kernel: "singbox",
 		},
 		{
+			name: "valid Xray GeoIP category",
+			rules: []CustomRouteRule{{
+				Match:  RouteMatch{GeoIPs: []string{"google", "geoip:cn"}},
+				Action: RouteAction{Type: "route", Target: "warp"},
+			}},
+			kernel: "xray",
+		},
+		{
 			name:    "missing match",
 			rules:   []CustomRouteRule{{Action: RouteAction{Type: "direct"}}},
 			kernel:  "singbox",
@@ -62,6 +70,12 @@ func TestValidateCustomRouteRules(t *testing.T) {
 			rules:   []CustomRouteRule{{Match: RouteMatch{Networks: []string{"icmp"}}, Action: RouteAction{Type: "direct"}}},
 			kernel:  "singbox",
 			wantErr: `custom_route_rules[0].match.networks contains unsupported network "icmp"`,
+		},
+		{
+			name:    "invalid GeoIP category",
+			rules:   []CustomRouteRule{{Match: RouteMatch{GeoIPs: []string{"google/cn"}}, Action: RouteAction{Type: "direct"}}},
+			kernel:  "xray",
+			wantErr: `custom_route_rules[0].match.geo_ips contains invalid GeoIP category "google/cn"`,
 		},
 	}
 

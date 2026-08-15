@@ -341,6 +341,7 @@ type CustomRouteRule struct {
 type RouteMatch struct {
 	Domains        []string `json:"domains,omitempty"`
 	DomainSuffixes []string `json:"domain_suffixes,omitempty"`
+	GeoIPs         []string `json:"geo_ips,omitempty"`
 	IPCIDRs        []string `json:"ip_cidrs,omitempty"`
 	Ports          []string `json:"ports,omitempty"`
 	Networks       []string `json:"networks,omitempty"`
@@ -353,6 +354,7 @@ func (m *RouteMatch) UnmarshalJSON(data []byte) error {
 	var raw struct {
 		Alias
 		DomainSuffixesCamel []string `json:"domainSuffixes"`
+		GeoIPsCamel         []string `json:"geoIps"`
 		IPCIDRsCamel        []string `json:"ipCidrs"`
 		SourceCIDRsCamel    []string `json:"sourceCidrs"`
 		SourcePortsCamel    []string `json:"sourcePorts"`
@@ -363,6 +365,9 @@ func (m *RouteMatch) UnmarshalJSON(data []byte) error {
 	*m = RouteMatch(raw.Alias)
 	if len(m.DomainSuffixes) == 0 {
 		m.DomainSuffixes = raw.DomainSuffixesCamel
+	}
+	if len(m.GeoIPs) == 0 {
+		m.GeoIPs = raw.GeoIPsCamel
 	}
 	if len(m.IPCIDRs) == 0 {
 		m.IPCIDRs = raw.IPCIDRsCamel

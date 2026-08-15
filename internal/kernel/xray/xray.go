@@ -633,7 +633,8 @@ func hexEncode(dst, src []byte) {
 
 // ensureGeoData downloads geo databases when routes reference geoip/geosite.
 func (x *Xray) ensureGeoData(nc *model.NodeSpec) {
-	needIP, needSite := kernel.NeedsGeoIP(nc.Routes), kernel.NeedsGeoSite(nc.Routes)
+	needIP := kernel.NeedsGeoIP(nc.Routes) || kernel.NeedsGeoIPRules(nc.CustomRouteRules)
+	needSite := kernel.NeedsGeoSite(nc.Routes) || kernel.NeedsGeoSiteRules(nc.CustomRouteRules)
 	if !needIP && !needSite {
 		return
 	}

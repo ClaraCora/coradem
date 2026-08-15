@@ -6,6 +6,7 @@ func RouteSupportMatrix() map[string]KernelRouteSupport {
 			Matchers: []string{
 				"domains",
 				"domain_suffixes",
+				"geo_ips",
 				"ip_cidrs",
 				"ports",
 				"networks",

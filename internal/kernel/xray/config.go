@@ -207,6 +207,11 @@ func buildInbound(nc *model.NodeSpec, users []model.UserSpec, tc kernel.TLSCert)
 		"listen":   listenAddr,
 		"port":     nc.ServerPort,
 		"protocol": nc.Protocol,
+		"sniffing": M{
+			"enabled":      true,
+			"destOverride": []string{"http", "tls", "quic"},
+			"routeOnly":    true,
+		},
 		"streamSettings": M{
 			"sockopt": M{
 				"reusePort": true,
@@ -631,22 +636,7 @@ func buildRealitySettings(nc *model.NodeSpec) M {
 }
 
 func buildRouting(rules []model.RouteRule, customRouteRules []model.CustomRouteRule, customRules []map[string]any, defaultOutboundTags ...string) M {
-	var xrayRules []M
-
-	// Structured custom routes now take the highest priority for panel-managed overrides.
-	for _, rule := range customRouteRules {
-		if rule.Disabled {
-			continue
-		}
-		xrayRules = append(xrayRules, compileCustomRouteRule(rule)...)
-	}
-
-	// Raw custom routes remain the escape hatch, but no longer outrank structured rules.
-	for _, cr := range customRules {
-		xrayRules = append(xrayRules, M(cr))
-	}
-
-	xrayRules = append(xrayRules, M{
+	xrayRules := []M{{
 		"type": "field",
 		"ip": []string{
 			"10.0.0.0/8",
@@ -662,7 +652,20 @@ func buildRouting(rules []model.RouteRule, customRouteRules []model.CustomRouteR
 			"::1/128",
 		},
 		"outboundTag": "block",
-	})
+	}}
+
+	// Structured custom routes now take the highest priority for panel-managed overrides.
+	for _, rule := range customRouteRules {
+		if rule.Disabled {
+			continue
+		}
+		xrayRules = append(xrayRules, compileCustomRouteRule(rule)...)
+	}
+
+	// Raw custom routes remain the escape hatch, but no longer outrank structured rules.
+	for _, cr := range customRules {
+		xrayRules = append(xrayRules, M(cr))
+	}
 
 	for _, rule := range rules {
 		xrayRules = append(xrayRules, compilePanelRouteRule(rule)...)
@@ -674,8 +677,12 @@ func buildRouting(rules []model.RouteRule, customRouteRules []model.CustomRouteR
 		xrayRules = append(xrayRules, M{"type": "field", "network": "tcp,udp", "outboundTag": defaultOutboundTag})
 	}
 
+	domainStrategy := "AsIs"
+	if kernel.NeedsGeoIP(rules) || kernel.NeedsGeoIPRules(customRouteRules) {
+		domainStrategy = "IPIfNonMatch"
+	}
 	return M{
-		"domainStrategy": "AsIs",
+		"domainStrategy": domainStrategy,
 		"rules":          xrayRules,
 	}
 }
@@ -748,12 +755,27 @@ func compileCustomRouteRule(rule model.CustomRouteRule) []M {
 			})
 		}
 	}
-	if len(rule.Match.IPCIDRs) > 0 {
-		compiled = append(compiled, M{
-			"type":        "field",
-			"ip":          copyStrings(rule.Match.IPCIDRs),
-			"outboundTag": outbound,
-		})
+	if len(rule.Match.IPCIDRs) > 0 || len(rule.Match.GeoIPs) > 0 {
+		ipMatchers := make([]string, 0, len(rule.Match.IPCIDRs)+len(rule.Match.GeoIPs))
+		for _, value := range rule.Match.IPCIDRs {
+			if value = strings.TrimSpace(value); value != "" {
+				ipMatchers = append(ipMatchers, value)
+			}
+		}
+		for _, category := range rule.Match.GeoIPs {
+			category = strings.ToLower(strings.TrimSpace(category))
+			category = strings.TrimSpace(strings.TrimPrefix(category, "geoip:"))
+			if category != "" {
+				ipMatchers = append(ipMatchers, "geoip:"+category)
+			}
+		}
+		if len(ipMatchers) > 0 {
+			compiled = append(compiled, M{
+				"type":        "field",
+				"ip":          ipMatchers,
+				"outboundTag": outbound,
+			})
+		}
 	}
 	if len(rule.Match.Ports) > 0 {
 		compiled = append(compiled, M{

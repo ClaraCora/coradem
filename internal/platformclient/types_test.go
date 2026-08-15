@@ -47,3 +47,19 @@ func TestUsersResponseModels(t *testing.T) {
 		t.Fatalf("unexpected users: %+v", users)
 	}
 }
+
+func TestNodeSpecModelPreservesGeoIPRoutes(t *testing.T) {
+	spec := NodeSpec{
+		NodeID: 19, Revision: 2, Protocol: "vless", ServerPort: 443, KernelType: "xray",
+		Settings: json.RawMessage(`{
+			"custom_route_rules":[{"match":{"geo_ips":["google"]},"action":{"type":"direct"}}]
+		}`),
+	}
+	modelSpec, err := spec.Model(config.KernelConfig{Type: "xray"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(modelSpec.CustomRouteRules) != 1 || len(modelSpec.CustomRouteRules[0].Match.GeoIPs) != 1 || modelSpec.CustomRouteRules[0].Match.GeoIPs[0] != "google" {
+		t.Fatalf("unexpected GeoIP route: %+v", modelSpec.CustomRouteRules)
+	}
+}

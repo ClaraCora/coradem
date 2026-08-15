@@ -46,6 +46,9 @@ func ValidateCustomRouteRules(rules []CustomRouteRule, kernelType string, availa
 		if err := validateNetworks(rule.Match.Networks, fmt.Sprintf("custom_route_rules[%d].match.networks", i)); err != nil {
 			return err
 		}
+		if err := validateGeoIPCategories(rule.Match.GeoIPs, fmt.Sprintf("custom_route_rules[%d].match.geo_ips", i)); err != nil {
+			return err
+		}
 
 		actionType := strings.ToLower(strings.TrimSpace(rule.Action.Type))
 		if actionType == "" {
@@ -83,6 +86,7 @@ func hasRouteMatch(match RouteMatch) bool {
 	for _, values := range [][]string{
 		match.Domains,
 		match.DomainSuffixes,
+		match.GeoIPs,
 		match.IPCIDRs,
 		match.Ports,
 		match.Networks,
@@ -105,6 +109,7 @@ func ensureRouteMatcherSupported(index int, kernelType string, matcherSupport ma
 	checks := map[string][]string{
 		"domains":         match.Domains,
 		"domain_suffixes": match.DomainSuffixes,
+		"geo_ips":         match.GeoIPs,
 		"ip_cidrs":        match.IPCIDRs,
 		"ports":           match.Ports,
 		"networks":        match.Networks,
@@ -117,6 +122,23 @@ func ensureRouteMatcherSupported(index int, kernelType string, matcherSupport ma
 		}
 		if _, ok := matcherSupport[matcher]; !ok {
 			return fmt.Errorf("custom_route_rules[%d].match.%s is not supported by kernel %q", index, matcher, kernelType)
+		}
+	}
+	return nil
+}
+
+func validateGeoIPCategories(values []string, field string) error {
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		value = strings.TrimSpace(strings.TrimPrefix(value, "geoip:"))
+		if value == "" {
+			continue
+		}
+		for index, char := range value {
+			valid := char >= 'a' && char <= 'z' || char >= '0' && char <= '9' || char == '.' || char == '_' || char == '-'
+			if !valid || index == 0 && !(char >= 'a' && char <= 'z' || char >= '0' && char <= '9') {
+				return fmt.Errorf("%s contains invalid GeoIP category %q", field, value)
+			}
 		}
 	}
 	return nil

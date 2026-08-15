@@ -68,6 +68,7 @@ type StandaloneCustomRouteRule struct {
 type StandaloneRouteMatch struct {
 	Domains        []string `yaml:"domains,omitempty"`
 	DomainSuffixes []string `yaml:"domain_suffixes,omitempty"`
+	GeoIPs         []string `yaml:"geo_ips,omitempty"`
 	IPCIDRs        []string `yaml:"ip_cidrs,omitempty"`
 	Ports          []string `yaml:"ports,omitempty"`
 	Networks       []string `yaml:"networks,omitempty"`

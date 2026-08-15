@@ -1,6 +1,7 @@
 package xray
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
@@ -10,6 +11,7 @@ import (
 	"github.com/ClaraCora/CPanelde/internal/kernel"
 	"github.com/ClaraCora/CPanelde/internal/model"
 	"github.com/ClaraCora/CPanelde/internal/panel"
+	"github.com/xtls/xray-core/infra/conf/serial"
 )
 
 var testKernelCfg = config.KernelConfig{
@@ -346,27 +348,27 @@ func TestBuildRouting_WithCustomRouteRules(t *testing.T) {
 	if len(xrayRules) != 6 {
 		t.Fatalf("expected 6 rules, got %d", len(xrayRules))
 	}
-	if xrayRules[0]["outboundTag"] != "warp-jp" {
-		t.Fatalf("expected first custom outbound warp-jp, got %v", xrayRules[0]["outboundTag"])
+	if xrayRules[0]["outboundTag"] != "block" {
+		t.Fatalf("private address protection must remain first: %v", xrayRules[0])
 	}
-	if got := xrayRules[0]["domain"].([]string); len(got) != 2 || got[0] != "full.example.com" || got[1] != "domain:example.org" {
+	if got := xrayRules[1]["domain"].([]string); len(got) != 2 || got[0] != "full.example.com" || got[1] != "domain:example.org" {
 		t.Fatalf("unexpected custom domains: %v", got)
 	}
-	if got := xrayRules[1]["port"]; got != "80,443-445" {
+	if got := xrayRules[2]["port"]; got != "80,443-445" {
 		t.Fatalf("unexpected port matcher: %v", got)
 	}
-	if got := xrayRules[2]["network"]; got != "tcp,udp" {
+	if got := xrayRules[3]["network"]; got != "tcp,udp" {
 		t.Fatalf("unexpected network matcher: %v", got)
 	}
-	if got := xrayRules[3]["source"].([]string); len(got) != 1 || got[0] != "192.168.1.0/24" {
+	if got := xrayRules[4]["source"].([]string); len(got) != 1 || got[0] != "192.168.1.0/24" {
 		t.Fatalf("unexpected source cidr matcher: %v", got)
 	}
-	if got := xrayRules[4]["sourcePort"]; got != "1000-1002" {
+	if got := xrayRules[5]["sourcePort"]; got != "1000-1002" {
 		t.Fatalf("unexpected source port matcher: %v", got)
 	}
 }
 
-func TestBuildRouting_StructuredCustomRulesRemainFirst(t *testing.T) {
+func TestBuildRouting_PrivateProtectionPrecedesCustomRules(t *testing.T) {
 	raw := []map[string]any{{"type": "field", "domain": []string{"keyword:raw"}, "outboundTag": "raw-tag"}}
 	custom := []model.CustomRouteRule{{
 		Match:  model.RouteMatch{DomainSuffixes: []string{"structured.example"}},
@@ -374,11 +376,77 @@ func TestBuildRouting_StructuredCustomRulesRemainFirst(t *testing.T) {
 	}}
 	routing := buildRouting(nil, custom, raw)
 	xrayRules := routing["rules"].([]M)
-	if xrayRules[0]["outboundTag"] != "direct" {
-		t.Fatalf("expected structured rule first, got %v", xrayRules[0]["outboundTag"])
+	if xrayRules[0]["outboundTag"] != "block" {
+		t.Fatalf("expected private protection first, got %v", xrayRules[0]["outboundTag"])
 	}
-	if xrayRules[1]["outboundTag"] != "raw-tag" {
-		t.Fatalf("expected raw custom rule second, got %v", xrayRules[1]["outboundTag"])
+	if xrayRules[1]["outboundTag"] != "direct" {
+		t.Fatalf("expected structured rule after private protection, got %v", xrayRules[1]["outboundTag"])
+	}
+	if xrayRules[2]["outboundTag"] != "raw-tag" {
+		t.Fatalf("expected raw custom rule after structured rule, got %v", xrayRules[2]["outboundTag"])
+	}
+}
+
+func TestBuildRouting_GoogleGeoIPBeforeDirectFallback(t *testing.T) {
+	custom := []model.CustomRouteRule{
+		{Match: model.RouteMatch{Domains: []string{"geosite:google"}, GeoIPs: []string{"google"}}, Action: model.RouteAction{Type: "route", Target: "landing"}},
+		{Match: model.RouteMatch{Networks: []string{"tcp", "udp"}}, Action: model.RouteAction{Type: "direct"}},
+	}
+	routing := buildRouting(nil, custom, nil, "landing")
+	rules := routing["rules"].([]M)
+	if routing["domainStrategy"] != "IPIfNonMatch" {
+		t.Fatalf("domain strategy = %v, want IPIfNonMatch", routing["domainStrategy"])
+	}
+	if len(rules) != 5 {
+		t.Fatalf("expected private, domain, GeoIP, direct and default rules, got %d", len(rules))
+	}
+	if rules[0]["outboundTag"] != "block" || rules[1]["outboundTag"] != "landing" || rules[2]["outboundTag"] != "landing" || rules[3]["outboundTag"] != "direct" || rules[4]["outboundTag"] != "landing" {
+		t.Fatalf("unexpected rule order: %v", rules)
+	}
+	if got := rules[2]["ip"].([]string); len(got) != 1 || got[0] != "geoip:google" {
+		t.Fatalf("unexpected GeoIP matcher: %v", got)
+	}
+}
+
+func TestCompileCustomRouteRule_SkipsBlankIPMatchers(t *testing.T) {
+	rules := compileCustomRouteRule(model.CustomRouteRule{
+		Match: model.RouteMatch{
+			Domains: []string{"geosite:google"},
+			GeoIPs:  []string{" ", "geoip: "},
+			IPCIDRs: []string{" "},
+		},
+		Action: model.RouteAction{Type: "direct"},
+	})
+	if len(rules) != 1 {
+		t.Fatalf("blank IP matchers must not create an empty Xray rule: %v", rules)
+	}
+	if _, exists := rules[0]["ip"]; exists {
+		t.Fatalf("unexpected empty IP matcher: %v", rules[0])
+	}
+}
+
+func TestBuildConfig_EnablesRouteOnlySniffing(t *testing.T) {
+	nc := panel.NodeConfig{Protocol: "vless", ServerPort: 443}
+	cfg := buildConfig(testKernelCfg, testNodeSpec(&nc), testUsers, kernel.TLSCert{})
+	inbound := cfg["inbounds"].([]M)[0]
+	sniffing := inbound["sniffing"].(M)
+	if sniffing["enabled"] != true || sniffing["routeOnly"] != true {
+		t.Fatalf("unexpected sniffing settings: %v", sniffing)
+	}
+	got := sniffing["destOverride"].([]string)
+	if len(got) != 3 || got[0] != "http" || got[1] != "tls" || got[2] != "quic" {
+		t.Fatalf("unexpected sniffing protocols: %v", got)
+	}
+}
+
+func TestBuildConfig_DefaultOutboundLoadsInXray(t *testing.T) {
+	nc := panel.NodeConfig{Protocol: "vless", ServerPort: 443, DefaultOutboundTag: "direct"}
+	data, err := marshalConfig(testKernelCfg, testNodeSpec(&nc), testUsers, kernel.TLSCert{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := serial.LoadJSONConfig(bytes.NewReader(data)); err != nil {
+		t.Fatalf("generated Xray config was rejected: %v\n%s", err, data)
 	}
 }
 

@@ -8,6 +8,9 @@ import (
 
 func NeedsGeoIPRules(rules []model.CustomRouteRule) bool {
 	for _, r := range rules {
+		if hasNonBlankRouteValues(r.Match.GeoIPs) {
+			return true
+		}
 		for _, v := range r.Match.IPCIDRs {
 			if strings.HasPrefix(v, "geoip:") {
 				return true
@@ -17,6 +20,15 @@ func NeedsGeoIPRules(rules []model.CustomRouteRule) bool {
 			if strings.HasPrefix(v, "geoip:") {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func hasNonBlankRouteValues(values []string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return true
 		}
 	}
 	return false
