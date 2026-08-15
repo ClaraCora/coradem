@@ -394,8 +394,8 @@ func TestBuildRouting_DefaultOutboundIsLast(t *testing.T) {
 	if rules[1]["outboundTag"] != "warp" {
 		t.Fatalf("default outbound = %v, want warp", rules[1]["outboundTag"])
 	}
-	if len(rules[1]) != 2 || rules[1]["type"] != "field" {
-		t.Fatalf("default outbound must be an unconditional field rule: %v", rules[1])
+	if rules[1]["type"] != "field" || rules[1]["network"] != "tcp,udp" {
+		t.Fatalf("default outbound must match TCP and UDP traffic: %v", rules[1])
 	}
 }
 

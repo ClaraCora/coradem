@@ -669,7 +669,9 @@ func buildRouting(rules []model.RouteRule, customRouteRules []model.CustomRouteR
 	}
 
 	if defaultOutboundTag := firstDefaultOutboundTag(defaultOutboundTags); defaultOutboundTag != "" {
-		xrayRules = append(xrayRules, M{"type": "field", "outboundTag": defaultOutboundTag})
+		// Xray field rules require at least one match condition. TCP and UDP cover
+		// all client traffic handled by this inbound while keeping the default last.
+		xrayRules = append(xrayRules, M{"type": "field", "network": "tcp,udp", "outboundTag": defaultOutboundTag})
 	}
 
 	return M{
