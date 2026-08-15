@@ -52,6 +52,7 @@ jobs:
         run: |
           VERSION=$(tr -d '\r\n' < VERSION)
           printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'
+          VERSION="${VERSION}+${GITHUB_SHA::12}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
       - name: Build Linux Agent
         env:
