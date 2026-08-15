@@ -58,7 +58,7 @@ func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.Use
 	}
 
 	// Merge panel routes and static config routes
-	cfg["route"] = buildRoutes(nc.Routes, nc.CustomRouteRules, mergeRouteList(nc.CustomRoutes, kcfg.CustomRoute))
+	cfg["route"] = buildRoutes(nc.Routes, nc.CustomRouteRules, mergeRouteList(nc.CustomRoutes, kcfg.CustomRoute), nc.DefaultOutboundTag)
 
 	// Automatically enable rule_set caching (cache_file) when panel routes
 	// reference geoip:/geosite: entries so that the downloaded .srs rule_set
@@ -250,7 +250,7 @@ func mergeRouteList(a, b []map[string]any) []map[string]any {
 	return res
 }
 
-func buildRoutes(panelRoutes []model.RouteRule, customRules []model.CustomRouteRule, custom []map[string]any) M {
+func buildRoutes(panelRoutes []model.RouteRule, customRules []model.CustomRouteRule, custom []map[string]any, defaultOutboundTags ...string) M {
 	var rules []M
 
 	// Structured custom routes now take the highest priority for panel-managed overrides.
@@ -302,9 +302,18 @@ func buildRoutes(panelRoutes []model.RouteRule, customRules []model.CustomRouteR
 	}
 
 	return M{
-		"final": "direct",
+		"final": firstDefaultOutboundTag(defaultOutboundTags),
 		"rules": rules,
 	}
+}
+
+func firstDefaultOutboundTag(values []string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return "direct"
 }
 
 func compilePanelRouteRule(pr model.RouteRule) []M {

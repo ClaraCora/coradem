@@ -12,6 +12,8 @@ func TestNodeSpecModelNormalizesPlatformSettings(t *testing.T) {
 		NodeID: 12, Revision: 4, Protocol: "vless", ListenIP: "127.0.0.1", ServerPort: 443, KernelType: "singbox",
 		Settings: json.RawMessage(`{
 			"transport":"ws",
+			"default_outbound_tag":"warp",
+			"custom_outbounds":[{"tag":"warp","protocol":"wireguard","settings":{"server":"1.1.1.1","server_port":2408,"private_key":"pk"}}],
 			"network_settings":{"path":"/edge","host":"edge.example.com"},
 			"tls":{"enabled":true,"server_name":"edge.example.com"},
 			"flow":"xtls-rprx-vision"
@@ -33,6 +35,9 @@ func TestNodeSpecModelNormalizesPlatformSettings(t *testing.T) {
 	}
 	if modelSpec.Flow != "xtls-rprx-vision" {
 		t.Fatalf("unexpected flow %q", modelSpec.Flow)
+	}
+	if modelSpec.DefaultOutboundTag != "warp" {
+		t.Fatalf("unexpected default outbound %q", modelSpec.DefaultOutboundTag)
 	}
 }
 

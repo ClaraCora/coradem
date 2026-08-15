@@ -795,6 +795,17 @@ func TestBuildRoutes_StructuredCustomRulesRemainFirst(t *testing.T) {
 	}
 }
 
+func TestBuildRoutes_DefaultOutboundIsFinal(t *testing.T) {
+	route := buildRoutes(nil, nil, nil, "warp")
+	if route["final"] != "warp" {
+		t.Fatalf("final outbound = %v, want warp", route["final"])
+	}
+	allRules := route["rules"].([]M)
+	if len(allRules) != 2 || allRules[0]["outbound"] != "block" || allRules[1]["outbound"] != "block" {
+		t.Fatalf("private-range blocks must remain before the final outbound: %v", allRules)
+	}
+}
+
 // --- TLS Config ---
 
 func TestBuildTLSConfig_WithCert(t *testing.T) {

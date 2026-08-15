@@ -382,6 +382,23 @@ func TestBuildRouting_StructuredCustomRulesRemainFirst(t *testing.T) {
 	}
 }
 
+func TestBuildRouting_DefaultOutboundIsLast(t *testing.T) {
+	routing := buildRouting(nil, nil, nil, "warp")
+	rules := routing["rules"].([]M)
+	if len(rules) != 2 {
+		t.Fatalf("expected private-range block and default outbound, got %d rules", len(rules))
+	}
+	if rules[0]["outboundTag"] != "block" {
+		t.Fatalf("private range block must run before the default outbound: %v", rules)
+	}
+	if rules[1]["outboundTag"] != "warp" {
+		t.Fatalf("default outbound = %v, want warp", rules[1]["outboundTag"])
+	}
+	if len(rules[1]) != 2 || rules[1]["type"] != "field" {
+		t.Fatalf("default outbound must be an unconditional field rule: %v", rules[1])
+	}
+}
+
 func TestBuildConfig_LogLevel(t *testing.T) {
 	tests := []struct {
 		input    string

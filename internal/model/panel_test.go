@@ -81,4 +81,30 @@ func TestNodeSpecFromPanelValidated(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
+
+	t.Run("accept default outbound target", func(t *testing.T) {
+		node, err := NodeSpecFromPanelValidated(&panel.NodeConfig{
+			Protocol:           "shadowsocks",
+			ServerPort:         8388,
+			DefaultOutboundTag: "warp",
+			CustomOutbounds: []panel.OutboundConfig{{
+				Tag: "warp", Protocol: "wireguard", Settings: map[string]any{"server": "1.1.1.1", "server_port": 2408, "private_key": "pk"},
+			}},
+		}, config.KernelConfig{Type: "singbox"})
+		if err != nil {
+			t.Fatalf("NodeSpecFromPanelValidated: %v", err)
+		}
+		if node.DefaultOutboundTag != "warp" {
+			t.Fatalf("default outbound = %q, want warp", node.DefaultOutboundTag)
+		}
+	})
+
+	t.Run("reject unknown default outbound target", func(t *testing.T) {
+		_, err := NodeSpecFromPanelValidated(&panel.NodeConfig{
+			Protocol: "shadowsocks", ServerPort: 8388, DefaultOutboundTag: "missing",
+		}, config.KernelConfig{Type: "singbox"})
+		if err == nil || !strings.Contains(err.Error(), `default outbound tag references unknown outbound "missing"`) {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
 }

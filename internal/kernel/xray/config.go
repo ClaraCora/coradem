@@ -78,7 +78,7 @@ func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.Use
 	}
 
 	// Merge panel routes and static config routes
-	cfg["routing"] = buildRouting(nc.Routes, nc.CustomRouteRules, mergeRouteList(nc.CustomRoutes, kcfg.CustomRoute))
+	cfg["routing"] = buildRouting(nc.Routes, nc.CustomRouteRules, mergeRouteList(nc.CustomRoutes, kcfg.CustomRoute), nc.DefaultOutboundTag)
 
 	mergeCustomXray(cfg, kcfg)
 	return cfg
@@ -630,7 +630,7 @@ func buildRealitySettings(nc *model.NodeSpec) M {
 	return reality
 }
 
-func buildRouting(rules []model.RouteRule, customRouteRules []model.CustomRouteRule, customRules []map[string]any) M {
+func buildRouting(rules []model.RouteRule, customRouteRules []model.CustomRouteRule, customRules []map[string]any, defaultOutboundTags ...string) M {
 	var xrayRules []M
 
 	// Structured custom routes now take the highest priority for panel-managed overrides.
@@ -668,10 +668,23 @@ func buildRouting(rules []model.RouteRule, customRouteRules []model.CustomRouteR
 		xrayRules = append(xrayRules, compilePanelRouteRule(rule)...)
 	}
 
+	if defaultOutboundTag := firstDefaultOutboundTag(defaultOutboundTags); defaultOutboundTag != "" {
+		xrayRules = append(xrayRules, M{"type": "field", "outboundTag": defaultOutboundTag})
+	}
+
 	return M{
 		"domainStrategy": "AsIs",
 		"rules":          xrayRules,
 	}
+}
+
+func firstDefaultOutboundTag(values []string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func compilePanelRouteRule(rule model.RouteRule) []M {

@@ -36,6 +36,11 @@ func ValidateNodeSpec(n *NodeSpec, kcfg config.KernelConfig) error {
 	if err := ValidateCustomRouteRules(n.CustomRouteRules, kernelType, availableTags); err != nil {
 		return fmt.Errorf("validate custom route rules: %w", err)
 	}
+	if defaultTag := strings.ToLower(strings.TrimSpace(n.DefaultOutboundTag)); defaultTag != "" {
+		if _, exists := availableTags[defaultTag]; !exists {
+			return fmt.Errorf("default outbound tag references unknown outbound %q", n.DefaultOutboundTag)
+		}
+	}
 	if err := validateTransportKernel(n.Network, kernelType); err != nil {
 		return err
 	}
