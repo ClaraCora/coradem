@@ -84,13 +84,14 @@ type v2UsersResponse struct {
 		UUID        string `json:"wybs"`
 		SpeedLimit  int    `json:"xs"`
 		DeviceLimit int    `json:"sbs"`
+		RouteScope  string `json:"lyfw"`
 	} `json:"yh"`
 }
 
 func (wire v2UsersResponse) public() UsersResponse {
 	result := UsersResponse{Users: make([]User, 0, len(wire.Users))}
 	for _, user := range wire.Users {
-		result.Users = append(result.Users, User{ID: user.ID, UUID: user.UUID, SpeedLimit: user.SpeedLimit, DeviceLimit: user.DeviceLimit})
+		result.Users = append(result.Users, User{ID: user.ID, UUID: user.UUID, SpeedLimit: user.SpeedLimit, DeviceLimit: user.DeviceLimit, RouteScope: user.RouteScope})
 	}
 	return result
 }

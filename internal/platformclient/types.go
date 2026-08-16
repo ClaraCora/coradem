@@ -150,6 +150,7 @@ type User struct {
 	UUID        string `json:"uuid"`
 	SpeedLimit  int    `json:"speed_limit"`
 	DeviceLimit int    `json:"device_limit"`
+	RouteScope  string `json:"route_scope"`
 }
 
 type UsersResponse struct {
@@ -159,7 +160,7 @@ type UsersResponse struct {
 func (r UsersResponse) Models() []model.UserSpec {
 	users := make([]model.UserSpec, 0, len(r.Users))
 	for _, user := range r.Users {
-		users = append(users, model.UserSpec{ID: user.ID, UUID: user.UUID, SpeedLimit: user.SpeedLimit, DeviceLimit: user.DeviceLimit})
+		users = append(users, model.UserSpec{ID: user.ID, UUID: user.UUID, SpeedLimit: user.SpeedLimit, DeviceLimit: user.DeviceLimit, RouteScope: user.RouteScope})
 	}
 	return users
 }

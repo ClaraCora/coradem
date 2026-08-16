@@ -78,7 +78,7 @@ func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.Use
 	}
 
 	// Merge panel routes and static config routes
-	cfg["routing"] = buildRouting(nc.Routes, nc.CustomRouteRules, mergeRouteList(nc.CustomRoutes, kcfg.CustomRoute), nc.DefaultOutboundTag)
+	cfg["routing"] = buildRoutingForUsers(nc, mergeRouteList(nc.CustomRoutes, kcfg.CustomRoute), users)
 
 	mergeCustomXray(cfg, kcfg)
 	return cfg
@@ -685,6 +685,61 @@ func buildRouting(rules []model.RouteRule, customRouteRules []model.CustomRouteR
 		"domainStrategy": domainStrategy,
 		"rules":          xrayRules,
 	}
+}
+
+// buildRoutingForUsers applies scoped route profiles to the stable Xray client
+// email (user@ID). Profiles are emitted as user-scoped field rules so admin
+// subscriptions cannot inherit member-only routing and vice versa.
+func buildRoutingForUsers(nc *model.NodeSpec, customRules []map[string]any, users []model.UserSpec) M {
+	if len(nc.RouteProfiles) == 0 {
+		return buildRouting(nc.Routes, nc.CustomRouteRules, customRules, nc.DefaultOutboundTag)
+	}
+	routing := buildRouting(nil, nil, nil)
+	xrayRules, _ := routing["rules"].([]M)
+	for scope, profile := range nc.RouteProfiles {
+		emails := make([]string, 0)
+		for _, user := range users {
+			userScope := user.RouteScope
+			if userScope != "admin" {
+				userScope = "member"
+			}
+			if scope == userScope {
+				emails = append(emails, userEmail(user.ID))
+			}
+		}
+		if len(emails) == 0 {
+			continue
+		}
+		for _, rule := range profile.CustomRouteRules {
+			for _, compiled := range compileCustomRouteRule(rule) {
+				compiled["user"] = emails
+				xrayRules = append(xrayRules, compiled)
+			}
+		}
+		if tag := firstDefaultOutboundTag([]string{profile.DefaultOutboundTag}); tag != "" {
+			xrayRules = append(xrayRules, M{"type": "field", "user": emails, "network": "tcp,udp", "outboundTag": tag})
+		}
+	}
+	for _, cr := range customRules {
+		xrayRules = append(xrayRules, M(cr))
+	}
+	for _, rule := range nc.Routes {
+		xrayRules = append(xrayRules, compilePanelRouteRule(rule)...)
+	}
+	routing["rules"] = xrayRules
+	if kernel.NeedsGeoIP(nc.Routes) || routeProfilesNeedGeoIP(nc.RouteProfiles) {
+		routing["domainStrategy"] = "IPIfNonMatch"
+	}
+	return routing
+}
+
+func routeProfilesNeedGeoIP(profiles map[string]model.RouteProfile) bool {
+	for _, profile := range profiles {
+		if kernel.NeedsGeoIPRules(profile.CustomRouteRules) {
+			return true
+		}
+	}
+	return false
 }
 
 func firstDefaultOutboundTag(values []string) string {

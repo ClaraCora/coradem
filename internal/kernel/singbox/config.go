@@ -58,12 +58,12 @@ func buildConfig(kcfg config.KernelConfig, nc *model.NodeSpec, users []model.Use
 	}
 
 	// Merge panel routes and static config routes
-	cfg["route"] = buildRoutes(nc.Routes, nc.CustomRouteRules, mergeRouteList(nc.CustomRoutes, kcfg.CustomRoute), nc.DefaultOutboundTag)
+	cfg["route"] = buildRoutesForUsers(nc, mergeRouteList(nc.CustomRoutes, kcfg.CustomRoute), users)
 
 	// Automatically enable rule_set caching (cache_file) when panel routes
 	// reference geoip:/geosite: entries so that the downloaded .srs rule_set
 	// files survive across process restarts.
-	if kernel.NeedsGeoIP(nc.Routes) || kernel.NeedsGeoSite(nc.Routes) || kernel.NeedsGeoIPRules(nc.CustomRouteRules) || kernel.NeedsGeoSiteRules(nc.CustomRouteRules) {
+	if kernel.NeedsGeoIP(nc.Routes) || kernel.NeedsGeoSite(nc.Routes) || kernel.NeedsGeoIPRules(nc.CustomRouteRules) || kernel.NeedsGeoSiteRules(nc.CustomRouteRules) || routeProfilesNeedGeo(nc.RouteProfiles) {
 		cfg["experimental"] = M{
 			"cache_file": M{
 				"enabled": true,
@@ -305,6 +305,59 @@ func buildRoutes(panelRoutes []model.RouteRule, customRules []model.CustomRouteR
 		"final": firstDefaultOutboundTag(defaultOutboundTags),
 		"rules": rules,
 	}
+}
+
+func buildRoutesForUsers(nc *model.NodeSpec, custom []map[string]any, users []model.UserSpec) M {
+	if len(nc.RouteProfiles) == 0 {
+		return buildRoutes(nc.Routes, nc.CustomRouteRules, custom, nc.DefaultOutboundTag)
+	}
+	route := buildRoutes(nil, nil, nil)
+	rules, _ := route["rules"].([]M)
+	for scope, profile := range nc.RouteProfiles {
+		userIDs := make([]string, 0)
+		for _, user := range users {
+			userScope := user.RouteScope
+			if userScope != "admin" {
+				userScope = "member"
+			}
+			if scope == userScope {
+				userIDs = append(userIDs, user.UUID)
+			}
+		}
+		if len(userIDs) == 0 {
+			continue
+		}
+		for _, rule := range profile.CustomRouteRules {
+			for _, compiled := range compileCustomRouteRule(rule) {
+				compiled["auth_user"] = userIDs
+				rules = append(rules, compiled)
+			}
+		}
+		if tag := strings.TrimSpace(profile.DefaultOutboundTag); tag != "" {
+			rules = append(rules, M{"auth_user": userIDs, "network": []string{"tcp", "udp"}, "outbound": tag})
+		}
+	}
+	for _, cr := range custom {
+		if compiled, ok := compileMaybeStructuredCustomRoute(cr); ok {
+			rules = append(rules, compiled...)
+		} else {
+			rules = append(rules, M(cr))
+		}
+	}
+	for _, panelRule := range nc.Routes {
+		rules = append(rules, compilePanelRouteRule(panelRule)...)
+	}
+	route["rules"] = rules
+	return route
+}
+
+func routeProfilesNeedGeo(profiles map[string]model.RouteProfile) bool {
+	for _, profile := range profiles {
+		if kernel.NeedsGeoIPRules(profile.CustomRouteRules) || kernel.NeedsGeoSiteRules(profile.CustomRouteRules) {
+			return true
+		}
+	}
+	return false
 }
 
 func firstDefaultOutboundTag(values []string) string {

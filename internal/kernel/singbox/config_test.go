@@ -16,6 +16,31 @@ var testUsersPanel = []panel.User{
 	{ID: 2, UUID: "bbbbbbbb-5555-6666-7777-888888888888", SpeedLimit: 3, DeviceLimit: 2},
 }
 
+func TestBuildRoutesForUsersScopesProfiles(t *testing.T) {
+	route := buildRoutesForUsers(&model.NodeSpec{RouteProfiles: map[string]model.RouteProfile{
+		"admin":  {CustomRouteRules: []model.CustomRouteRule{{Match: model.RouteMatch{DomainSuffixes: []string{"admin.example"}}, Action: model.RouteAction{Type: "direct"}}}},
+		"member": {CustomRouteRules: []model.CustomRouteRule{{Match: model.RouteMatch{DomainSuffixes: []string{"member.example"}}, Action: model.RouteAction{Type: "block"}}}},
+	}}, nil, []model.UserSpec{{ID: 1, UUID: "admin-uuid", RouteScope: "admin"}, {ID: 2, UUID: "member-uuid", RouteScope: "member"}})
+	rules, ok := route["rules"].([]M)
+	if !ok {
+		t.Fatalf("rules type = %T", route["rules"])
+	}
+	var admin, member bool
+	for _, rule := range rules {
+		users, _ := rule["auth_user"].([]string)
+		domains, _ := rule["domain_suffix"].([]string)
+		if len(users) == 1 && users[0] == "admin-uuid" && len(domains) == 1 {
+			admin = true
+		}
+		if len(users) == 1 && users[0] == "member-uuid" && len(domains) == 1 {
+			member = true
+		}
+	}
+	if !admin || !member {
+		t.Fatalf("scoped user rules missing: %#v", rules)
+	}
+}
+
 // --- Shadowsocks ---
 
 var testUsers = model.UserSpecsFromPanel(testUsersPanel)

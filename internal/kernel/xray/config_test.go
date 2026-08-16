@@ -24,6 +24,31 @@ var testUsersPanel = []panel.User{
 	{ID: 5, UUID: "4d5965c8-a60c-452a-a943-af83ec0bb0db"},
 }
 
+func TestBuildRoutingForUsersScopesProfiles(t *testing.T) {
+	routing := buildRoutingForUsers(&model.NodeSpec{RouteProfiles: map[string]model.RouteProfile{
+		"admin":  {CustomRouteRules: []model.CustomRouteRule{{Match: model.RouteMatch{DomainSuffixes: []string{"admin.example"}}, Action: model.RouteAction{Type: "direct"}}}},
+		"member": {CustomRouteRules: []model.CustomRouteRule{{Match: model.RouteMatch{DomainSuffixes: []string{"member.example"}}, Action: model.RouteAction{Type: "block"}}}},
+	}}, nil, []model.UserSpec{{ID: 1, RouteScope: "admin"}, {ID: 2, RouteScope: "member"}})
+	rules, ok := routing["rules"].([]M)
+	if !ok {
+		t.Fatalf("rules type = %T", routing["rules"])
+	}
+	var admin, member bool
+	for _, rule := range rules {
+		users, _ := rule["user"].([]string)
+		domain, _ := rule["domain"].([]string)
+		if len(users) == 1 && users[0] == "user@1" && len(domain) == 1 {
+			admin = true
+		}
+		if len(users) == 1 && users[0] == "user@2" && len(domain) == 1 {
+			member = true
+		}
+	}
+	if !admin || !member {
+		t.Fatalf("scoped user rules missing: %#v", rules)
+	}
+}
+
 var testUsers = model.UserSpecsFromPanel(testUsersPanel)
 
 func testNodeSpec(nc *panel.NodeConfig) *model.NodeSpec { return model.NodeSpecFromPanel(nc) }

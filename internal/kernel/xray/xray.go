@@ -635,6 +635,10 @@ func hexEncode(dst, src []byte) {
 func (x *Xray) ensureGeoData(nc *model.NodeSpec) {
 	needIP := kernel.NeedsGeoIP(nc.Routes) || kernel.NeedsGeoIPRules(nc.CustomRouteRules)
 	needSite := kernel.NeedsGeoSite(nc.Routes) || kernel.NeedsGeoSiteRules(nc.CustomRouteRules)
+	for _, profile := range nc.RouteProfiles {
+		needIP = needIP || kernel.NeedsGeoIPRules(profile.CustomRouteRules)
+		needSite = needSite || kernel.NeedsGeoSiteRules(profile.CustomRouteRules)
+	}
 	if !needIP && !needSite {
 		return
 	}

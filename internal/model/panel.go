@@ -86,6 +86,17 @@ func NodeSpecFromPanel(nc *panel.NodeConfig) *NodeSpec {
 			},
 		})
 	}
+	profiles := make(map[string]RouteProfile, len(nc.CustomRouteProfiles))
+	for scope, profile := range nc.CustomRouteProfiles {
+		converted := RouteProfile{DefaultOutboundTag: profile.DefaultOutboundTag}
+		for _, outbound := range profile.CustomOutbounds {
+			converted.CustomOutbounds = append(converted.CustomOutbounds, OutboundConfig{Tag: outbound.Tag, Protocol: outbound.Protocol, Settings: cloneAnyMap(outbound.Settings), ProxyTag: outbound.ProxyTag})
+		}
+		for _, rule := range profile.CustomRouteRules {
+			converted.CustomRouteRules = append(converted.CustomRouteRules, CustomRouteRule{Name: rule.Name, Disabled: rule.Disabled, Match: RouteMatch{Domains: cloneStringSlice(rule.Match.Domains), DomainSuffixes: cloneStringSlice(rule.Match.DomainSuffixes), GeoIPs: cloneStringSlice(rule.Match.GeoIPs), IPCIDRs: cloneStringSlice(rule.Match.IPCIDRs), Ports: cloneStringSlice(rule.Match.Ports), Networks: cloneStringSlice(rule.Match.Networks), SourceCIDRs: cloneStringSlice(rule.Match.SourceCIDRs), SourcePorts: cloneStringSlice(rule.Match.SourcePorts)}, Action: RouteAction{Type: rule.Action.Type, Target: rule.Action.Target}})
+		}
+		profiles[scope] = converted
+	}
 
 	return &NodeSpec{
 		Protocol:            nc.Protocol,
@@ -99,6 +110,7 @@ func NodeSpecFromPanel(nc *panel.NodeConfig) *NodeSpec {
 		CustomOutbounds:     outbounds,
 		CustomRoutes:        cloneMapSlice(nc.CustomRoutes),
 		CustomRouteRules:    customRouteRules,
+		RouteProfiles:       profiles,
 		DefaultOutboundTag:  nc.DefaultOutboundTag,
 		CertConfig:          certCfg,
 		AutoTLS:             nc.AutoTLS,
@@ -227,6 +239,17 @@ func (n *NodeSpec) ToPanel() *panel.NodeConfig {
 			},
 		})
 	}
+	profiles := make(map[string]panel.RouteProfile, len(n.RouteProfiles))
+	for scope, profile := range n.RouteProfiles {
+		converted := panel.RouteProfile{DefaultOutboundTag: profile.DefaultOutboundTag}
+		for _, outbound := range profile.CustomOutbounds {
+			converted.CustomOutbounds = append(converted.CustomOutbounds, panel.OutboundConfig{Tag: outbound.Tag, Protocol: outbound.Protocol, Settings: cloneAnyMap(outbound.Settings), ProxyTag: outbound.ProxyTag})
+		}
+		for _, rule := range profile.CustomRouteRules {
+			converted.CustomRouteRules = append(converted.CustomRouteRules, panel.CustomRouteRule{Name: rule.Name, Disabled: rule.Disabled, Match: panel.RouteMatch{Domains: cloneStringSlice(rule.Match.Domains), DomainSuffixes: cloneStringSlice(rule.Match.DomainSuffixes), GeoIPs: cloneStringSlice(rule.Match.GeoIPs), IPCIDRs: cloneStringSlice(rule.Match.IPCIDRs), Ports: cloneStringSlice(rule.Match.Ports), Networks: cloneStringSlice(rule.Match.Networks), SourceCIDRs: cloneStringSlice(rule.Match.SourceCIDRs), SourcePorts: cloneStringSlice(rule.Match.SourcePorts)}, Action: panel.RouteAction{Type: rule.Action.Type, Target: rule.Action.Target}})
+		}
+		profiles[scope] = converted
+	}
 
 	return &panel.NodeConfig{
 		Protocol:            n.Protocol,
@@ -240,6 +263,7 @@ func (n *NodeSpec) ToPanel() *panel.NodeConfig {
 		CustomOutbounds:     outbounds,
 		CustomRoutes:        cloneMapSlice(n.CustomRoutes),
 		CustomRouteRules:    customRouteRules,
+		CustomRouteProfiles: profiles,
 		DefaultOutboundTag:  n.DefaultOutboundTag,
 		CertConfig:          certCfg,
 		AutoTLS:             n.AutoTLS,
