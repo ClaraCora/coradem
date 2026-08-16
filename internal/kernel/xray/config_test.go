@@ -47,6 +47,21 @@ func TestBuildRoutingForUsersScopesProfiles(t *testing.T) {
 	if !admin || !member {
 		t.Fatalf("scoped user rules missing: %#v", rules)
 	}
+	last := rules[len(rules)-1]
+	if last["outboundTag"] != "direct" || last["network"] != "tcp,udp" {
+		t.Fatalf("scoped profiles must end with an explicit direct fallback: %#v", last)
+	}
+}
+
+func TestBuildRoutingForUsersUsesConfiguredDefaultOutbound(t *testing.T) {
+	routing := buildRoutingForUsers(&model.NodeSpec{DefaultOutboundTag: "warp", RouteProfiles: map[string]model.RouteProfile{
+		"admin": {CustomRouteRules: []model.CustomRouteRule{{Match: model.RouteMatch{DomainSuffixes: []string{"admin.example"}}, Action: model.RouteAction{Type: "direct"}}}},
+	}}, nil, []model.UserSpec{{ID: 1, RouteScope: "admin"}})
+	rules := routing["rules"].([]M)
+	last := rules[len(rules)-1]
+	if last["outboundTag"] != "warp" {
+		t.Fatalf("configured default outbound = %v, want warp", last["outboundTag"])
+	}
 }
 
 var testUsers = model.UserSpecsFromPanel(testUsersPanel)

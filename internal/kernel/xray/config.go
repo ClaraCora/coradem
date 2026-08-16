@@ -692,7 +692,7 @@ func buildRouting(rules []model.RouteRule, customRouteRules []model.CustomRouteR
 // subscriptions cannot inherit member-only routing and vice versa.
 func buildRoutingForUsers(nc *model.NodeSpec, customRules []map[string]any, users []model.UserSpec) M {
 	if len(nc.RouteProfiles) == 0 {
-		return buildRouting(nc.Routes, nc.CustomRouteRules, customRules, nc.DefaultOutboundTag)
+		return buildRouting(nc.Routes, nc.CustomRouteRules, customRules, effectiveDefaultOutboundTag(nc.DefaultOutboundTag))
 	}
 	routing := buildRouting(nil, nil, nil)
 	xrayRules, _ := routing["rules"].([]M)
@@ -726,6 +726,10 @@ func buildRoutingForUsers(nc *model.NodeSpec, customRules []map[string]any, user
 	for _, rule := range nc.Routes {
 		xrayRules = append(xrayRules, compilePanelRouteRule(rule)...)
 	}
+	// Scoped profiles may intentionally leave their default outbound empty. Keep
+	// the same explicit direct fallback after all scoped and global rules so a
+	// profile only changes traffic when it actually selects an outbound.
+	xrayRules = append(xrayRules, M{"type": "field", "network": "tcp,udp", "outboundTag": effectiveDefaultOutboundTag(nc.DefaultOutboundTag)})
 	routing["rules"] = xrayRules
 	if kernel.NeedsGeoIP(nc.Routes) || routeProfilesNeedGeoIP(nc.RouteProfiles) {
 		routing["domainStrategy"] = "IPIfNonMatch"
@@ -749,6 +753,13 @@ func firstDefaultOutboundTag(values []string) string {
 		}
 	}
 	return ""
+}
+
+func effectiveDefaultOutboundTag(value string) string {
+	if tag := strings.TrimSpace(value); tag != "" {
+		return tag
+	}
+	return "direct"
 }
 
 func compilePanelRouteRule(rule model.RouteRule) []M {
