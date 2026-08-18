@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-REPOSITORY="ClaraCora/CPanelde"
+REPOSITORY="ClaraCora/CPP"
 SERVICE_NAME="corade"
 SYSTEMD_SERVICE_NAME="corade.service"
 BINARY_PATH="/usr/local/bin/corade"
@@ -43,7 +43,7 @@ Optional:
   --kernel singbox|xray       Default kernel type (default: xray)
   --health-port PORT          Local health endpoint (default: 65530)
   --binary PATH               Install a local Corade binary
-  --version VERSION           GitHub release tag (default: latest)
+  --version VERSION           CPP Corade release version (default: latest)
   --help                      Show this help
 
 CORADE_CONTROL_URL and CORADE_AGENT_TOKEN may be used instead of putting those
@@ -178,7 +178,12 @@ stage_artifacts() {
     [ -f "$BINARY_SOURCE" ] || fail "binary not found: $BINARY_SOURCE"
     cp "$BINARY_SOURCE" "$STAGED_BINARY"
   else
-    base_url="https://github.com/${REPOSITORY}/releases/download/${VERSION}"
+    case "$VERSION" in
+      latest) release_tag="corade-latest" ;;
+      corade-*) release_tag="$VERSION" ;;
+      *) release_tag="corade-${VERSION}" ;;
+    esac
+    base_url="https://github.com/${REPOSITORY}/releases/download/${release_tag}"
     log "downloading ${REPOSITORY} release ${VERSION}"
     try_download "$AGENT_ARTIFACT" "$STAGED_BINARY" "$base_url" || fail "could not download a verified Agent binary"
     try_download "$CLI_ARTIFACT" "$STAGED_CLI" "$base_url" || fail "could not download a verified coradectl binary"

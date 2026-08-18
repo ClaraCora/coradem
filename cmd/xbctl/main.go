@@ -36,7 +36,7 @@ const (
 	openRCLogPath          = "/var/log/corade/corade.log"
 	agentEnvironmentPath   = "/etc/corade/agent.env"
 	defaultInstallRoot     = "/etc/corade"
-	downloadBase           = "https://github.com/ClaraCora/CPanelde/releases"
+	downloadBase           = "https://github.com/ClaraCora/CPP/releases"
 )
 
 var (
@@ -607,10 +607,13 @@ func ensureRoot(cmd string) error {
 }
 
 func resolveDownloadURL(artifact, version string) string {
-	if version == "latest" {
-		return downloadBase + "/latest/download/" + artifact
+	tag := version
+	if tag == "latest" {
+		tag = "corade-latest"
+	} else if !strings.HasPrefix(tag, "corade-") {
+		tag = "corade-" + tag
 	}
-	return downloadBase + "/download/" + version + "/" + artifact
+	return downloadBase + "/download/" + tag + "/" + artifact
 }
 
 func downloadFile(url, dest string) error {

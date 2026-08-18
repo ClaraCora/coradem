@@ -1,4 +1,4 @@
-name: Build latest release
+name: Build and publish Corade
 
 on:
   push:
@@ -6,10 +6,10 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: latest-release
+  group: cpp-corade-release
   cancel-in-progress: true
 
 jobs:
@@ -52,23 +52,24 @@ jobs:
         run: |
           VERSION=$(tr -d '\r\n' < VERSION)
           printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'
-          VERSION="${VERSION}+${GITHUB_SHA::12}"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          BUILD_SHA=$(printf '%.12s' "$GITHUB_SHA")
+          echo "base=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build=$VERSION+$BUILD_SHA" >> "$GITHUB_OUTPUT"
       - name: Build Linux Agent
         env:
           CGO_ENABLED: "0"
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ steps.version.outputs.build }}
         run: |
           mkdir -p dist
           BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           go build -trimpath \
             -tags "with_quic with_utls with_wireguard with_acme with_clash_api" \
-            -ldflags "-s -w -X main.version=${VERSION} -X main.buildTime=${BUILD_TIME}" \
+            -ldflags "-s -w -X main.version=$VERSION -X main.buildTime=$BUILD_TIME" \
             -o "dist/corade-linux-${{ matrix.arch }}" ./cmd/corade
           go build -trimpath \
-            -ldflags "-s -w -X main.version=${VERSION} -X main.buildTime=${BUILD_TIME}" \
+            -ldflags "-s -w -X main.version=$VERSION -X main.buildTime=$BUILD_TIME" \
             -o "dist/coradectl-linux-${{ matrix.arch }}" ./cmd/xbctl
           cd dist
           sha256sum "corade-linux-${{ matrix.arch }}" > "corade-linux-${{ matrix.arch }}.sha256"
@@ -84,25 +85,45 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           pattern: corade-linux-*
           path: dist
           merge-multiple: true
-      - name: Publish rolling latest release
+      - name: Publish to CPP
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.CPP_RELEASE_TOKEN }}
+          GH_REPO: ClaraCora/CPP
         run: |
+          test -n "$GH_TOKEN" || { echo "CPP_RELEASE_TOKEN is not configured" >&2; exit 1; }
           VERSION=$(tr -d '\r\n' < VERSION)
           printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'
-          printf '%s+%s\n' "$VERSION" "${GITHUB_SHA::12}" > dist/agent-version.txt
-          git tag --force latest "$GITHUB_SHA"
-          git push origin refs/tags/latest --force
-          if gh release view latest >/dev/null 2>&1; then
-            gh release edit latest --title "Latest CPanelde Agent build" --prerelease --notes "Automatically built from main at ${GITHUB_SHA}."
-            gh release upload latest dist/* --clobber
+          BUILD_SHA=$(printf '%.12s' "$GITHUB_SHA")
+          BUILD_VERSION="$VERSION+$BUILD_SHA"
+          printf '%s\n' "$BUILD_VERSION" > dist/agent-version.txt
+          printf '%s\n' "$GITHUB_SHA" > dist/source-sha.txt
+          cat > dist/release-manifest.json <<EOF
+          {"component":"corade","version":"$BUILD_VERSION","source_repository":"$GITHUB_REPOSITORY","source_commit":"$GITHUB_SHA"}
+          EOF
+
+          VERSION_TAG="corade-$VERSION"
+          if gh release view "$VERSION_TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            mkdir -p existing
+            gh release download "$VERSION_TAG" --repo "$GH_REPO" --pattern source-sha.txt --dir existing
+            test "$(tr -d '\r\n' < existing/source-sha.txt)" = "$GITHUB_SHA" || {
+              echo "CPP release $VERSION_TAG already belongs to another commit; bump VERSION before publishing" >&2
+              exit 1
+            }
+            gh release upload "$VERSION_TAG" dist/* --repo "$GH_REPO" --clobber
           else
-            gh release create latest dist/* --title "Latest CPanelde Agent build" --prerelease --notes "Automatically built from main at ${GITHUB_SHA}."
+            gh release create "$VERSION_TAG" dist/* --repo "$GH_REPO" --title "Corade $VERSION" --notes "Corade $BUILD_VERSION. Checksums and source metadata are included in the assets."
+          fi
+
+          ROLLING_TAG="corade-latest"
+          NOTES="Rolling Corade build $BUILD_VERSION. Checksums and source metadata are included in the assets."
+          if gh release view "$ROLLING_TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release edit "$ROLLING_TAG" --repo "$GH_REPO" --title "Corade latest ($BUILD_VERSION)" --prerelease --notes "$NOTES"
+            gh release upload "$ROLLING_TAG" dist/* --repo "$GH_REPO" --clobber
+          else
+            gh release create "$ROLLING_TAG" dist/* --repo "$GH_REPO" --title "Corade latest ($BUILD_VERSION)" --prerelease --notes "$NOTES"
           fi

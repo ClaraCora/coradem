@@ -32,10 +32,11 @@ go build -trimpath -tags "with_quic with_utls with_wireguard with_acme with_clas
 ## One-click installation
 
 The command generated on a CPanel server page contains the required server ID
-and communication key. It uses this repository's installer directly:
+and communication key. Public installers and release binaries are hosted in
+the CPP distribution repository:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ClaraCora/CPanelde/main/install.sh | sudo sh -s -- \
+curl -fsSL https://raw.githubusercontent.com/ClaraCora/CPP/main/corade-install.sh | sudo sh -s -- \
   --control-url https://panel.example.com \
   --communication-key YOUR_COMMUNICATION_KEY \
   --machine-id mch_example
@@ -44,7 +45,7 @@ curl -fsSL https://raw.githubusercontent.com/ClaraCora/CPanelde/main/install.sh 
 Upgrade an installed Agent without entering its communication key again:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ClaraCora/CPanelde/main/install.sh | sudo sh -s -- upgrade
+curl -fsSL https://raw.githubusercontent.com/ClaraCora/CPP/main/corade-install.sh | sudo sh -s -- upgrade
 ```
 
 The installer supports Linux amd64 and arm64 with either systemd or Alpine

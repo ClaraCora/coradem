@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	agentUpgradeScript = `set -eu; upgrade_script=$(mktemp); trap "rm -f \"$upgrade_script\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ClaraCora/CPanelde/main/install.sh -o "$upgrade_script"; /bin/sh "$upgrade_script" upgrade`
+	agentUpgradeScript = `set -eu; upgrade_script=$(mktemp); trap "rm -f \"$upgrade_script\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ClaraCora/CPP/main/corade-install.sh -o "$upgrade_script"; /bin/sh "$upgrade_script" upgrade`
 	upgradeLogDir      = "/var/log/corade"
 	upgradeLogPath     = "/var/log/corade/upgrade.log"
 )
