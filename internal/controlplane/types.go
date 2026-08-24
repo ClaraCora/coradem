@@ -49,14 +49,21 @@ type Snapshot struct {
 }
 
 type ReportPayload struct {
-	Traffic map[int][2]int64
-	Alive   map[int][]string
-	Online  map[int]int
-	CPU     float64
-	Mem     [2]uint64
-	Swap    [2]uint64
-	Disk    [2]uint64
-	Metrics map[string]interface{}
+	// BatchID is stable across retries of the same flushed report. Control
+	// planes that support idempotency use it as their request key; other
+	// control planes may ignore it.
+	BatchID string
+	// OccurredAt is captured when the batch is first flushed and reused on
+	// retries, making the complete request body stable alongside BatchID.
+	OccurredAt string
+	Traffic    map[int][2]int64
+	Alive      map[int][]string
+	Online     map[int]int
+	CPU        float64
+	Mem        [2]uint64
+	Swap       [2]uint64
+	Disk       [2]uint64
+	Metrics    map[string]interface{}
 }
 
 type PushClient interface {

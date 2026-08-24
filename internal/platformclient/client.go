@@ -172,6 +172,26 @@ func (c *Client) SendHeartbeat(ctx context.Context, heartbeat Heartbeat) (Heartb
 	return result, err
 }
 
+// SendUpgradeResult reports the lifecycle state of an Agent upgrade task.
+// The result is intentionally separate from heartbeat telemetry so an upgrade
+// can be acknowledged before the current process schedules its own restart.
+func (c *Client) SendUpgradeResult(ctx context.Context, taskID, status, version, message string) error {
+	if c.v2 != nil {
+		return c.requestV2(ctx, http.MethodPost, "/ca/cc/fwq/jg", map[string]string{
+			"bh": taskID,
+			"zt": status,
+			"bb": version,
+			"cw": message,
+		}, nil)
+	}
+	return c.request(ctx, http.MethodPost, "/ca/cc/fwq/jg", map[string]string{
+		"task_id": taskID,
+		"status":  status,
+		"version": version,
+		"error":   message,
+	}, nil, nil)
+}
+
 func (c *Client) SendTelemetry(ctx context.Context, key string, batch TelemetryBatch) error {
 	if key == "" {
 		key = NewIdempotencyKey("tel")

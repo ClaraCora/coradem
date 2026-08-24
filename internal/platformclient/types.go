@@ -203,8 +203,9 @@ type Heartbeat struct {
 }
 
 type AgentCommand struct {
-	ID   string `json:"id"`
-	Type string `json:"type"`
+	ID            string `json:"id"`
+	Type          string `json:"type"`
+	TargetVersion string `json:"target_version,omitempty"`
 }
 
 type HeartbeatResponse struct {

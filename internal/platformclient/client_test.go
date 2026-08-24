@@ -38,7 +38,9 @@ func TestClientUsesCACCRoutesAndBearerAuthentication(t *testing.T) {
 		case "/ca/cc/bg":
 			data = map[string]any{"changes": []any{}, "next_cursor": "8"}
 		case "/ca/cc/fwq/xt":
-			data = map[string]any{"accepted": true, "commands": []any{map[string]any{"id": "upg_test", "type": "agent.upgrade"}}}
+			data = map[string]any{"accepted": true, "commands": []any{map[string]any{"id": "upg_test", "type": "agent.upgrade", "target_version": "v2.0.0"}}}
+		case "/ca/cc/fwq/jg":
+			data = map[string]any{"accepted": true}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": data, "meta": map[string]any{"request_id": "req_test"}, "error": nil})
@@ -66,8 +68,11 @@ func TestClientUsesCACCRoutesAndBearerAuthentication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !heartbeat.Accepted || len(heartbeat.Commands) != 1 || heartbeat.Commands[0].Type != "agent.upgrade" {
+	if !heartbeat.Accepted || len(heartbeat.Commands) != 1 || heartbeat.Commands[0].Type != "agent.upgrade" || heartbeat.Commands[0].TargetVersion != "v2.0.0" {
 		t.Fatalf("unexpected heartbeat response: %+v", heartbeat)
+	}
+	if err := client.SendUpgradeResult(ctx, "upg_test", "acknowledged", "", ""); err != nil {
+		t.Fatal(err)
 	}
 	if err := client.SendTelemetry(ctx, "batch-1", TelemetryBatch{}); err != nil {
 		t.Fatal(err)
@@ -75,7 +80,7 @@ func TestClientUsesCACCRoutesAndBearerAuthentication(t *testing.T) {
 
 	want := []string{
 		"POST /ca/cc/ws", "GET /ca/cc/fwq/jd", "GET /ca/cc/jd/12/pz", "GET /ca/cc/jd/12/yh",
-		"GET /ca/cc/bg?yb=7", "POST /ca/cc/fwq/xt", "POST /ca/cc/yc",
+		"GET /ca/cc/bg?yb=7", "POST /ca/cc/fwq/xt", "POST /ca/cc/fwq/jg", "POST /ca/cc/yc",
 	}
 	if len(requests) != len(want) {
 		t.Fatalf("got requests %v", requests)
@@ -131,7 +136,9 @@ func TestV2ClientUsesEncryptedPostRoutesWithoutBrandHeaders(t *testing.T) {
 		case "/ca/cc/bg":
 			response = map[string]any{"bg": []any{}, "xyb": "8"}
 		case "/ca/cc/fwq/xt":
-			response = map[string]any{"js": true, "rw": []any{map[string]any{"bh": "upg_test", "lx": "agent.upgrade"}}}
+			response = map[string]any{"js": true, "rw": []any{map[string]any{"bh": "upg_test", "lx": "agent.upgrade", "bb": "v2.0.0"}}}
+		case "/ca/cc/fwq/jg":
+			response = map[string]any{"js": true}
 		}
 		encoded, _ := json.Marshal(response)
 		w.Header().Set("Content-Type", "application/octet-stream")
@@ -164,8 +171,11 @@ func TestV2ClientUsesEncryptedPostRoutesWithoutBrandHeaders(t *testing.T) {
 		t.Fatalf("changes = %+v, %v", changes, err)
 	}
 	heartbeat, err := client.SendHeartbeat(ctx, Heartbeat{Version: "test", Kernel: "xray", Capabilities: map[string]any{"encrypted": true}, Metrics: map[string]any{"cpu": 1}})
-	if err != nil || !heartbeat.Accepted || len(heartbeat.Commands) != 1 {
+	if err != nil || !heartbeat.Accepted || len(heartbeat.Commands) != 1 || heartbeat.Commands[0].TargetVersion != "v2.0.0" {
 		t.Fatalf("heartbeat = %+v, %v", heartbeat, err)
+	}
+	if err := client.SendUpgradeResult(ctx, "upg_test", "acknowledged", "", ""); err != nil {
+		t.Fatal(err)
 	}
 	if err := client.SendTelemetry(ctx, "batch-1", TelemetryBatch{Events: []TelemetryEvent{{Type: "node.telemetry", NodeID: 12, OccurredAt: "now", Data: map[string]any{"online": 1}}}}); err != nil {
 		t.Fatal(err)
@@ -173,7 +183,7 @@ func TestV2ClientUsesEncryptedPostRoutesWithoutBrandHeaders(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(requests) != 7 {
+	if len(requests) != 8 {
 		t.Fatalf("requests = %d, want 7", len(requests))
 	}
 	for _, request := range requests {
@@ -195,8 +205,11 @@ func TestV2ClientUsesEncryptedPostRoutesWithoutBrandHeaders(t *testing.T) {
 	if requests[5].payload["bb"] != "test" || requests[5].payload["nh"] != "xray" {
 		t.Errorf("heartbeat did not use V2 fields: %+v", requests[5].payload)
 	}
-	if requests[6].payload["mdj"] != "batch-1" {
-		t.Errorf("idempotency key did not use encrypted payload: %+v", requests[6].payload)
+	if requests[6].path != "/ca/cc/fwq/jg" || requests[6].payload["bh"] != "upg_test" || requests[6].payload["zt"] != "acknowledged" {
+		t.Errorf("upgrade result did not use V2 fields: %+v", requests[6].payload)
+	}
+	if requests[7].payload["mdj"] != "batch-1" {
+		t.Errorf("idempotency key did not use encrypted payload: %+v", requests[7].payload)
 	}
 }
 

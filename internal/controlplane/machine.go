@@ -134,6 +134,9 @@ func (p *MachinePanelControlPlane) Report(payload ReportPayload) error {
 }
 
 func (p *MachinePanelControlPlane) ReportDevices(push PushClient, devices map[int][]string) {
+	if devices == nil {
+		return
+	}
 	if push != nil {
 		push.SendDeviceReport(devices)
 	}

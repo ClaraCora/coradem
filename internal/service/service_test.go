@@ -4,15 +4,99 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ClaraCora/CPanelde/internal/cert"
 	"github.com/ClaraCora/CPanelde/internal/config"
+	"github.com/ClaraCora/CPanelde/internal/controlplane"
 	"github.com/ClaraCora/CPanelde/internal/kernel"
 	"github.com/ClaraCora/CPanelde/internal/limiter"
 	"github.com/ClaraCora/CPanelde/internal/model"
 	"golang.org/x/time/rate"
 )
+
+type reportTestControlPlane struct {
+	mu       sync.Mutex
+	failNext bool
+	reports  []controlplane.ReportPayload
+}
+
+func (p *reportTestControlPlane) Initial(context.Context, func() map[string]interface{}, chan<- controlplane.Event, chan<- controlplane.StatusChange) (controlplane.Bootstrap, error) {
+	return controlplane.Bootstrap{}, nil
+}
+func (p *reportTestControlPlane) Poll(context.Context) (controlplane.Snapshot, error) {
+	return controlplane.Snapshot{}, nil
+}
+func (p *reportTestControlPlane) Discover(context.Context, func() map[string]interface{}, chan<- controlplane.Event, chan<- controlplane.StatusChange) (controlplane.PushClient, error) {
+	return nil, nil
+}
+func (p *reportTestControlPlane) Metrics() controlplane.APIMetrics { return controlplane.APIMetrics{} }
+func (p *reportTestControlPlane) SupportsPolling() bool            { return true }
+func (p *reportTestControlPlane) SupportsDiscovery() bool          { return false }
+func (p *reportTestControlPlane) SupportsReporting() bool          { return true }
+func (p *reportTestControlPlane) SupportsDeviceReports() bool      { return false }
+func (p *reportTestControlPlane) Report(payload controlplane.ReportPayload) error {
+	p.mu.Lock()
+	p.reports = append(p.reports, cloneReportPayload(payload))
+	fail := p.failNext
+	p.failNext = false
+	p.mu.Unlock()
+	if fail {
+		return errors.New("response lost")
+	}
+	return nil
+}
+func (p *reportTestControlPlane) ReportDevices(controlplane.PushClient, map[int][]string) {}
+
+func (p *reportTestControlPlane) snapshotReports() []controlplane.ReportPayload {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	result := make([]controlplane.ReportPayload, len(p.reports))
+	for i, report := range p.reports {
+		result[i] = cloneReportPayload(report)
+	}
+	return result
+}
+
+func TestReportBatchRetainsPayloadAndKeyAcrossLostResponse(t *testing.T) {
+	cp := &reportTestControlPlane{failNext: true}
+	s := newService(&config.Config{}, cp)
+	s.kernel = &fakeKernel{running: true}
+	s.tracker.Process(map[int][2]int64{7: {100, 200}}, nil, 1)
+
+	first := s.beginReport()
+	if first == nil || first.BatchID == "" {
+		t.Fatal("expected a report batch")
+	}
+	if err := cp.Report(*first); err == nil {
+		t.Fatal("expected the simulated response loss")
+	}
+	// New traffic arrives while the old response is unknown. beginReport must
+	// return the exact old batch so the panel's idempotency key remains valid.
+	s.tracker.Process(map[int][2]int64{7: {150, 250}}, nil, 1)
+	retry := s.beginReport()
+	if retry.BatchID != first.BatchID || retry.OccurredAt != first.OccurredAt {
+		t.Fatalf("retry identity changed: first=%+v retry=%+v", first, retry)
+	}
+	if retry.Traffic[7] != first.Traffic[7] {
+		t.Fatalf("retry traffic changed: first=%v retry=%v", first.Traffic, retry.Traffic)
+	}
+	// Once the old batch is accepted, the next call creates a new identity and
+	// includes traffic accumulated after the original flush.
+	cp.failNext = false
+	if err := cp.Report(*retry); err != nil {
+		t.Fatal(err)
+	}
+	s.completeReport(retry.BatchID)
+	next := s.beginReport()
+	if next.BatchID == first.BatchID {
+		t.Fatal("next report reused completed batch id")
+	}
+	if next.Traffic[7] != [2]int64{50, 50} {
+		t.Fatalf("next traffic = %v, want [50 50]", next.Traffic)
+	}
+}
 
 type fakeKernel struct {
 	running bool

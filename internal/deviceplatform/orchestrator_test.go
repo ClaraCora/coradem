@@ -89,12 +89,19 @@ func TestNodeChangeNotifiesOnlyTargetNode(t *testing.T) {
 
 func TestHandleCommandsSchedulesAgentUpgrade(t *testing.T) {
 	var scheduled string
-	orchestrator := &Orchestrator{scheduleUpgrade: func(_ context.Context, taskID string) error {
+	var targetVersion string
+	orchestrator := &Orchestrator{upgradeStatePath: t.TempDir() + "/state.json", scheduleUpgrade: func(_ context.Context, taskID, target, _ string) error {
 		scheduled = taskID
+		targetVersion = target
 		return nil
 	}}
-	orchestrator.handleCommands(context.Background(), []platformclient.AgentCommand{{ID: "upg_test", Type: "agent.upgrade"}})
+	// A nil client keeps the test focused on command scheduling; result reports
+	// are best-effort and therefore do not affect scheduling.
+	orchestrator.handleCommands(context.Background(), []platformclient.AgentCommand{{ID: "upg_test", Type: "agent.upgrade", TargetVersion: "v2.0.0"}})
 	if scheduled != "upg_test" {
 		t.Fatalf("scheduled task = %q, want upg_test", scheduled)
+	}
+	if targetVersion != "v2.0.0" {
+		t.Fatalf("target version = %q, want v2.0.0", targetVersion)
 	}
 }

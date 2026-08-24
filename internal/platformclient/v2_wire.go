@@ -122,15 +122,16 @@ func (wire v2ChangesResponse) public() ChangesResponse {
 type v2HeartbeatResponse struct {
 	Accepted bool `json:"js"`
 	Commands []struct {
-		ID   string `json:"bh"`
-		Type string `json:"lx"`
+		ID            string `json:"bh"`
+		Type          string `json:"lx"`
+		TargetVersion string `json:"bb,omitempty"`
 	} `json:"rw"`
 }
 
 func (wire v2HeartbeatResponse) public() HeartbeatResponse {
 	result := HeartbeatResponse{Accepted: wire.Accepted, Commands: make([]AgentCommand, 0, len(wire.Commands))}
 	for _, command := range wire.Commands {
-		result.Commands = append(result.Commands, AgentCommand{ID: command.ID, Type: command.Type})
+		result.Commands = append(result.Commands, AgentCommand{ID: command.ID, Type: command.Type, TargetVersion: command.TargetVersion})
 	}
 	return result
 }

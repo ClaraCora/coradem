@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -76,6 +78,13 @@ type Service struct {
 
 	// metricsMu: lastUsers, lastConfig, wsClient, wsDisconnectAt (buildMetrics vs main loop).
 	metricsMu sync.RWMutex
+
+	// reportMu protects a report that was flushed from the tracker but whose
+	// response was not confirmed. It must be retried as the same batch before
+	// newer traffic is flushed, otherwise a lost response can double-count the
+	// old data or cause it to share the old idempotency key with new data.
+	reportMu      sync.Mutex
+	pendingReport *controlplane.ReportPayload
 }
 
 // pullResult carries the outcome of an async pullViaAPI back to the main goroutine.
@@ -963,28 +972,21 @@ func (s *Service) pushReportAsync() {
 		return
 	}
 
-	traffic := s.tracker.FlushTraffic()
-	aliveIPs := s.tracker.FlushAliveIPs()
-	online := s.tracker.CurrentOnline()
-	status := monitor.Collect()
-	metrics := s.buildMetrics(status)
-	metrics["kernel_status"] = s.kernel.IsRunning()
+	payload := s.beginReport()
+	if payload == nil {
+		return
+	}
 
 	go func() {
 		defer s.pushActive.Store(false)
-		if err := s.sink.Report(controlplane.ReportPayload{Traffic: traffic, Alive: aliveIPs, Online: online, CPU: status.CPU, Mem: [2]uint64{status.MemTotal, status.MemUsed}, Swap: [2]uint64{status.SwapTotal, status.SwapUsed}, Disk: [2]uint64{status.DiskTotal, status.DiskUsed}, Metrics: metrics}); err != nil {
+		if err := s.sink.Report(*payload); err != nil {
 			nlog.Core().Warn("failed to push report", "error", err)
-			if len(traffic) > 0 {
-				s.tracker.RestoreTraffic(traffic)
-			}
-			if len(aliveIPs) > 0 {
-				s.tracker.RestoreAliveIPs(aliveIPs)
-			}
 			s.pushBackoff.onFailure()
 			return
 		}
+		s.completeReport(payload.BatchID)
 		s.pushBackoff.onSuccess()
-		nlog.ReportPushed(len(traffic), len(online))
+		nlog.ReportPushed(len(payload.Traffic), len(payload.Online))
 	}()
 }
 
@@ -993,16 +995,110 @@ func (s *Service) pushReportSync() {
 	if !s.sink.SupportsReporting() {
 		return
 	}
-	traffic := s.tracker.FlushTraffic()
-	aliveIPs := s.tracker.FlushAliveIPs()
-	online := s.tracker.CurrentOnline()
+	payload := s.beginReport()
+	if payload == nil {
+		return
+	}
+	if err := s.sink.Report(*payload); err != nil {
+		nlog.Core().Warn("failed to push final report", "error", err)
+		return
+	}
+	s.completeReport(payload.BatchID)
+}
+
+func (s *Service) beginReport() *controlplane.ReportPayload {
+	s.reportMu.Lock()
+	defer s.reportMu.Unlock()
+	if s.pendingReport != nil {
+		copy := cloneReportPayload(*s.pendingReport)
+		return &copy
+	}
+
 	status := monitor.Collect()
 	metrics := s.buildMetrics(status)
 	metrics["kernel_status"] = s.kernel.IsRunning()
-
-	if err := s.sink.Report(controlplane.ReportPayload{Traffic: traffic, Alive: aliveIPs, Online: online, CPU: status.CPU, Mem: [2]uint64{status.MemTotal, status.MemUsed}, Swap: [2]uint64{status.SwapTotal, status.SwapUsed}, Disk: [2]uint64{status.DiskTotal, status.DiskUsed}, Metrics: metrics}); err != nil {
-		nlog.Core().Warn("failed to push final report", "error", err)
+	payload := controlplane.ReportPayload{
+		BatchID:    newReportBatchID(),
+		OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Traffic:    cloneTraffic(s.tracker.FlushTraffic()),
+		Alive:      cloneAliveIPs(s.tracker.FlushAliveIPs()),
+		Online:     s.tracker.CurrentOnline(),
+		CPU:        status.CPU,
+		Mem:        [2]uint64{status.MemTotal, status.MemUsed},
+		Swap:       [2]uint64{status.SwapTotal, status.SwapUsed},
+		Disk:       [2]uint64{status.DiskTotal, status.DiskUsed},
+		Metrics:    metrics,
 	}
+	s.pendingReport = &payload
+	copy := cloneReportPayload(payload)
+	return &copy
+}
+
+func (s *Service) completeReport(batchID string) {
+	s.reportMu.Lock()
+	defer s.reportMu.Unlock()
+	if s.pendingReport != nil && s.pendingReport.BatchID == batchID {
+		s.pendingReport = nil
+	}
+}
+
+func cloneReportPayload(payload controlplane.ReportPayload) controlplane.ReportPayload {
+	payload.Traffic = cloneTraffic(payload.Traffic)
+	payload.Alive = cloneAliveIPs(payload.Alive)
+	payload.Online = cloneOnline(payload.Online)
+	if payload.Metrics != nil {
+		payload.Metrics = cloneMetrics(payload.Metrics)
+	}
+	return payload
+}
+
+func cloneTraffic(input map[int][2]int64) map[int][2]int64 {
+	if input == nil {
+		return nil
+	}
+	output := make(map[int][2]int64, len(input))
+	for id, value := range input {
+		output[id] = value
+	}
+	return output
+}
+
+func cloneAliveIPs(input map[int][]string) map[int][]string {
+	if input == nil {
+		return nil
+	}
+	output := make(map[int][]string, len(input))
+	for id, values := range input {
+		output[id] = append([]string(nil), values...)
+	}
+	return output
+}
+
+func cloneOnline(input map[int]int) map[int]int {
+	if input == nil {
+		return nil
+	}
+	output := make(map[int]int, len(input))
+	for id, value := range input {
+		output[id] = value
+	}
+	return output
+}
+
+func cloneMetrics(input map[string]interface{}) map[string]interface{} {
+	output := make(map[string]interface{}, len(input))
+	for key, value := range input {
+		output[key] = value
+	}
+	return output
+}
+
+func newReportBatchID() string {
+	var random [12]byte
+	if _, err := rand.Read(random[:]); err == nil {
+		return "tel-" + hex.EncodeToString(random[:])
+	}
+	return fmt.Sprintf("tel-%d", time.Now().UnixNano())
 }
 
 // buildMetrics aggregates node-level metrics to be reported to the panel.
@@ -1116,20 +1212,23 @@ func computeUserHash(users []model.UserSpec) string {
 
 // ─── Device management ──────────────────────────────────────────────────
 
-// sendDeviceBatch reports local device snapshot to panel via WS.
+// sendDeviceBatch reports local device snapshots. Device-platform mode uses
+// its encrypted HTTP telemetry channel; legacy panel mode may use WS.
 func (s *Service) sendDeviceBatch() {
-	if s.wsClient == nil || !s.wsClient.IsConnected() {
+	if !s.sink.SupportsDeviceReports() {
 		return
 	}
 
 	devices := s.tracker.FlushAliveIPs()
-	// FlushAliveIPs returns nil if no changes since last flush
+	// FlushAliveIPs returns nil if no changes since last flush. Still invoke the
+	// sink so a control plane can retry a snapshot whose response was lost.
 	if devices == nil {
-		nlog.Core().Debug("device snapshot unchanged, skipping")
-		return
+		nlog.Core().Debug("device snapshot unchanged, checking pending delivery")
 	}
 	s.sink.ReportDevices(s.wsClient, devices)
-	nlog.Core().Debug("device snapshot sent", "users", len(devices))
+	if devices != nil {
+		nlog.Core().Debug("device snapshot sent", "users", len(devices))
+	}
 }
 
 // reportDevices periodically reports device snapshot to panel.

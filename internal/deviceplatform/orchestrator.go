@@ -2,7 +2,9 @@ package deviceplatform
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -43,7 +45,8 @@ type Orchestrator struct {
 	pullInterval      int
 	heartbeatInterval time.Duration
 	cursor            atomic.Int64
-	scheduleUpgrade   func(context.Context, string) error
+	scheduleUpgrade   func(context.Context, string, string, string) error
+	upgradeStatePath  string
 }
 
 func New(cfg *config.Config, version string) *Orchestrator {
@@ -60,7 +63,8 @@ func New(cfg *config.Config, version string) *Orchestrator {
 	return &Orchestrator{
 		cfg: cfg, version: version, client: client, initErr: initErr,
 		nodes: make(map[int]*nodeHandle), statuses: make(map[int]chan<- controlplane.StatusChange),
-		scheduleUpgrade: scheduleAgentUpgrade,
+		scheduleUpgrade:  scheduleAgentUpgrade,
+		upgradeStatePath: upgradeStatePath(cfg.Kernel.ConfigDir),
 	}
 }
 
@@ -84,6 +88,9 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		}
 	}
 	o.applyIntervals(handshake)
+	// A previous upgrade may have restarted this process before its result could
+	// be sent. Retry that result before normal command processing begins.
+	o.reportPendingUpgrade(ctx)
 	if err := o.advanceCursor(handshake.Cursor); err != nil {
 		return fmt.Errorf("device platform handshake cursor: %w", err)
 	}
@@ -125,6 +132,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			o.rediscover(ctx)
 			o.pullChanges(ctx)
 		case <-heartbeatTicker.C:
+			o.reportPendingUpgrade(ctx)
 			o.sendHeartbeat(ctx)
 		}
 	}
@@ -418,17 +426,105 @@ func (o *Orchestrator) handleCommands(ctx context.Context, commands []platformcl
 	for _, command := range commands {
 		switch command.Type {
 		case "agent.upgrade":
+			if strings.TrimSpace(command.ID) == "" {
+				nlog.Core().Error("Agent upgrade command has no task id")
+				continue
+			}
+			// ACK is sent before scheduling because scheduling is detached and may
+			// stop this process. A persisted state lets the replacement process
+			// finish the lifecycle if the response is lost during restart.
+			if err := o.persistUpgradeState(command.ID, command.TargetVersion, "acknowledged", ""); err != nil {
+				nlog.Core().Error("persist Agent upgrade state", "task_id", command.ID, "error", err)
+				o.failUpgrade(ctx, command.ID, "could not persist Agent upgrade state")
+				continue
+			}
+			if err := o.sendUpgradeResult(ctx, command.ID, "acknowledged", "", ""); err != nil {
+				nlog.Core().Warn("acknowledge Agent upgrade", "task_id", command.ID, "error", err)
+			}
 			if o.scheduleUpgrade == nil {
 				nlog.Core().Error("Agent upgrade scheduler is unavailable", "task_id", command.ID)
+				o.failUpgrade(ctx, command.ID, "Agent upgrade scheduler is unavailable")
 				continue
 			}
-			if err := o.scheduleUpgrade(ctx, command.ID); err != nil {
+			if err := o.scheduleUpgrade(ctx, command.ID, command.TargetVersion, o.upgradeStatePath); err != nil {
 				nlog.Core().Error("schedule Agent upgrade", "task_id", command.ID, "error", err)
+				o.failUpgrade(ctx, command.ID, err.Error())
 				continue
 			}
-			nlog.Core().Info("Agent upgrade scheduled", "task_id", command.ID)
+			nlog.Core().Info("Agent upgrade scheduled", "task_id", command.ID, "target_version", command.TargetVersion)
 		default:
 			nlog.Core().Warn("unsupported Agent command", "task_id", command.ID, "type", command.Type)
+		}
+	}
+}
+
+func (o *Orchestrator) persistUpgradeState(taskID, targetVersion, status, message string) error {
+	return saveUpgradeState(o.upgradeStatePath, upgradeState{TaskID: taskID, TargetVersion: targetVersion, Status: status, Error: message})
+}
+
+func (o *Orchestrator) sendUpgradeResult(ctx context.Context, taskID, status, version, message string) error {
+	if o.client == nil {
+		return errors.New("device platform client is unavailable")
+	}
+	resultCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	return o.client.SendUpgradeResult(resultCtx, taskID, status, version, message)
+}
+
+func (o *Orchestrator) failUpgrade(ctx context.Context, taskID, message string) {
+	_ = o.persistUpgradeState(taskID, "", "failed", message)
+	if err := o.sendUpgradeResult(ctx, taskID, "failed", o.version, message); err != nil {
+		nlog.Core().Warn("report Agent upgrade failure", "task_id", taskID, "error", err)
+		return
+	}
+	_ = os.Remove(o.upgradeStatePath)
+}
+
+func (o *Orchestrator) reportPendingUpgrade(ctx context.Context) {
+	state, err := loadUpgradeState(o.upgradeStatePath)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			nlog.Core().Warn("read Agent upgrade state", "error", err)
+		}
+		return
+	}
+	result, resultErr := loadUpgradeResult(upgradeResultPath(o.upgradeStatePath))
+	if resultErr == nil && result.TaskID == state.TaskID {
+		message := ""
+		status := result.Status
+		if status == "succeeded" && state.TargetVersion != "" && !targetVersionMatches(o.version, state.TargetVersion) {
+			status = "failed"
+			message = fmt.Sprintf("Agent reported version %q, target was %q", o.version, state.TargetVersion)
+		} else if status == "failed" {
+			message = fmt.Sprintf("upgrade command exited with status %d", result.Code)
+		}
+		if err := o.sendUpgradeResult(ctx, state.TaskID, status, o.version, message); err != nil {
+			nlog.Core().Warn("report Agent upgrade result", "task_id", state.TaskID, "status", status, "error", err)
+			return
+		}
+		_ = os.Remove(upgradeResultPath(o.upgradeStatePath))
+		_ = os.Remove(o.upgradeStatePath)
+		return
+	}
+	if state.Status == "acknowledged" && state.TargetVersion != "" && targetVersionMatches(o.version, state.TargetVersion) {
+		if err := o.sendUpgradeResult(ctx, state.TaskID, "succeeded", o.version, ""); err != nil {
+			nlog.Core().Warn("report inferred Agent upgrade success", "task_id", state.TaskID, "error", err)
+			return
+		}
+		_ = os.Remove(o.upgradeStatePath)
+		return
+	}
+	if state.Status == "failed" {
+		if err := o.sendUpgradeResult(ctx, state.TaskID, "failed", o.version, state.Error); err != nil {
+			nlog.Core().Warn("retry Agent upgrade failure", "task_id", state.TaskID, "error", err)
+			return
+		}
+		_ = os.Remove(o.upgradeStatePath)
+		return
+	}
+	if state.Status == "acknowledged" {
+		if err := o.sendUpgradeResult(ctx, state.TaskID, "acknowledged", "", ""); err != nil {
+			nlog.Core().Warn("retry Agent upgrade acknowledgement", "task_id", state.TaskID, "error", err)
 		}
 	}
 }

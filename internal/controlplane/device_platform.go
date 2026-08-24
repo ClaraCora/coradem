@@ -3,6 +3,9 @@ package controlplane
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"sort"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -12,14 +15,23 @@ import (
 )
 
 type DevicePlatformControlPlane struct {
-	client       *platformclient.Client
-	nodeID       int
-	kcfg         config.KernelConfig
-	pushInterval int
-	pullInterval int
-	push         PushClient
-	registerFn   func(statuses chan<- StatusChange) *NodeMailbox
-	revision     atomic.Int64
+	client        *platformclient.Client
+	nodeID        int
+	kcfg          config.KernelConfig
+	pushInterval  int
+	pullInterval  int
+	push          PushClient
+	registerFn    func(statuses chan<- StatusChange) *NodeMailbox
+	revision      atomic.Int64
+	deviceMu      sync.Mutex
+	pendingDevice *deviceReport
+}
+
+type deviceReport struct {
+	key        string
+	occurredAt string
+	devices    map[int][]string
+	next       map[int][]string
 }
 
 func NewDevicePlatformControlPlane(
@@ -100,9 +112,17 @@ func (p *DevicePlatformControlPlane) Discover(
 func (p *DevicePlatformControlPlane) Report(payload ReportPayload) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	return p.client.SendTelemetry(ctx, platformclient.NewIdempotencyKey(fmt.Sprintf("node-%d", p.nodeID)), platformclient.TelemetryBatch{
+	key := payload.BatchID
+	if key == "" {
+		key = platformclient.NewIdempotencyKey(fmt.Sprintf("node-%d", p.nodeID))
+	}
+	occurredAt := payload.OccurredAt
+	if occurredAt == "" {
+		occurredAt = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	return p.client.SendTelemetry(ctx, key, platformclient.TelemetryBatch{
 		Events: []platformclient.TelemetryEvent{{
-			Type: "node.telemetry", NodeID: p.nodeID, OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
+			Type: "node.telemetry", NodeID: p.nodeID, OccurredAt: occurredAt,
 			Data: map[string]any{
 				"revision": p.revision.Load(),
 				"traffic":  payload.Traffic, "alive": payload.Alive, "online": payload.Online,
@@ -114,17 +134,65 @@ func (p *DevicePlatformControlPlane) Report(payload ReportPayload) error {
 }
 
 func (p *DevicePlatformControlPlane) ReportDevices(push PushClient, devices map[int][]string) {
+	_ = push // device-platform telemetry uses the encrypted HTTP channel
+	normalizedDevices := cloneDeviceMap(devices)
+	p.deviceMu.Lock()
+	if p.pendingDevice == nil {
+		if normalizedDevices == nil {
+			p.deviceMu.Unlock()
+			return
+		}
+		p.pendingDevice = &deviceReport{
+			key:        platformclient.NewIdempotencyKey(fmt.Sprintf("devices-%d", p.nodeID)),
+			occurredAt: time.Now().UTC().Format(time.RFC3339Nano),
+			devices:    normalizedDevices,
+		}
+	} else if normalizedDevices != nil && !reflect.DeepEqual(normalizedDevices, p.pendingDevice.devices) {
+		// Keep the newest snapshot aside while the old request is retried with
+		// its original idempotency key. A snapshot is replaceable, but a batch
+		// key must never be reused for different contents.
+		p.pendingDevice.next = normalizedDevices
+	}
+	current := *p.pendingDevice
+	current.devices = cloneDeviceMap(p.pendingDevice.devices)
+	p.deviceMu.Unlock()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	err := p.client.SendTelemetry(ctx, platformclient.NewIdempotencyKey(fmt.Sprintf("devices-%d", p.nodeID)), platformclient.TelemetryBatch{
+	err := p.client.SendTelemetry(ctx, current.key, platformclient.TelemetryBatch{
 		Events: []platformclient.TelemetryEvent{{
-			Type: "node.devices", NodeID: p.nodeID, OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
-			Data: map[string]any{"devices": devices},
+			Type: "node.devices", NodeID: p.nodeID, OccurredAt: current.occurredAt,
+			Data: map[string]any{"devices": current.devices},
 		}},
 	})
 	if err != nil {
 		nlog.Core().Warn("device platform device report failed", "node_id", p.nodeID, "error", err)
+		return
 	}
+	p.deviceMu.Lock()
+	if p.pendingDevice != nil && p.pendingDevice.key == current.key {
+		if p.pendingDevice.next != nil {
+			p.pendingDevice.devices = p.pendingDevice.next
+			p.pendingDevice.next = nil
+			p.pendingDevice.key = platformclient.NewIdempotencyKey(fmt.Sprintf("devices-%d", p.nodeID))
+			p.pendingDevice.occurredAt = time.Now().UTC().Format(time.RFC3339Nano)
+		} else {
+			p.pendingDevice = nil
+		}
+	}
+	p.deviceMu.Unlock()
+}
+
+func cloneDeviceMap(input map[int][]string) map[int][]string {
+	if input == nil {
+		return nil
+	}
+	output := make(map[int][]string, len(input))
+	for id, ips := range input {
+		output[id] = append([]string(nil), ips...)
+		sort.Strings(output[id])
+	}
+	return output
 }
 
 func (p *DevicePlatformControlPlane) Metrics() APIMetrics {
