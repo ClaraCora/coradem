@@ -10,7 +10,7 @@ permissions:
 
 concurrency:
   group: cpp-corade-release
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   test:
@@ -33,16 +33,11 @@ jobs:
           docker run --rm --privileged -v "$PWD:/src:ro" -v /tmp/coradectl:/usr/local/bin/coradectl:ro alpine:3.22 /bin/sh /src/.github/tests/openrc-install-test.sh
       - run: go test ./...
 
-  build:
+  publish:
+    name: Build and publish to CPP
+    if: github.ref == 'refs/heads/main'
     needs: test
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - arch: amd64
-            goarch: amd64
-          - arch: arm64
-            goarch: arm64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -57,41 +52,34 @@ jobs:
           BUILD_SHA=$(printf '%.12s' "$GITHUB_SHA")
           echo "base=$VERSION" >> "$GITHUB_OUTPUT"
           echo "build=$VERSION+$BUILD_SHA" >> "$GITHUB_OUTPUT"
-      - name: Build Linux Agent
+      # Keep both architectures in this job; Releases do not use Actions artifact storage.
+      - name: Build Linux Agent and CLI for all architectures
         env:
           CGO_ENABLED: "0"
           GOOS: linux
-          GOARCH: ${{ matrix.goarch }}
           VERSION: ${{ steps.version.outputs.build }}
         run: |
           mkdir -p dist
           BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          go build -trimpath \
-            -tags "with_quic with_utls with_wireguard with_acme with_clash_api" \
-            -ldflags "-s -w -X main.version=$VERSION -X main.buildTime=$BUILD_TIME" \
-            -o "dist/corade-linux-${{ matrix.arch }}" ./cmd/corade
-          go build -trimpath \
-            -ldflags "-s -w -X main.version=$VERSION -X main.buildTime=$BUILD_TIME" \
-            -o "dist/coradectl-linux-${{ matrix.arch }}" ./cmd/xbctl
+          for arch in amd64 arm64; do
+            GOARCH="$arch" go build -trimpath \
+              -tags "with_quic with_utls with_wireguard with_acme with_clash_api" \
+              -ldflags "-s -w -X main.version=$VERSION -X main.buildTime=$BUILD_TIME" \
+              -o "dist/corade-linux-$arch" ./cmd/corade
+            GOARCH="$arch" go build -trimpath \
+              -ldflags "-s -w -X main.version=$VERSION -X main.buildTime=$BUILD_TIME" \
+              -o "dist/coradectl-linux-$arch" ./cmd/xbctl
+          done
           cd dist
-          sha256sum "corade-linux-${{ matrix.arch }}" > "corade-linux-${{ matrix.arch }}.sha256"
-          sha256sum "coradectl-linux-${{ matrix.arch }}" > "coradectl-linux-${{ matrix.arch }}.sha256"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: corade-linux-${{ matrix.arch }}
-          path: dist/*
-          if-no-files-found: error
+          for arch in amd64 arm64; do
+            for binary in corade coradectl; do
+              artifact="$binary-linux-$arch"
+              test -s "$artifact"
+              sha256sum "$artifact" > "$artifact.sha256"
+            done
+          done
+          sha256sum -c ./*.sha256
 
-  publish:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: corade-linux-*
-          path: dist
-          merge-multiple: true
       - name: Publish to CPP
         env:
           GH_TOKEN: ${{ secrets.CPP_RELEASE_TOKEN }}

@@ -68,15 +68,3 @@ jobs:
             make build-linux-arm64
           fi
 
-      - name: Upload corade artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: corade-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: corade-${{ matrix.goos }}-${{ matrix.goarch }}
-
-      - name: Upload coradectl artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: coradectl-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: coradectl-${{ matrix.goos }}-${{ matrix.goarch }}
-
