@@ -30,6 +30,8 @@ jobs:
         run: |
           sh -n install.sh
           sh -n time-sync-check.sh
+          sh .github/tests/installer-checksum-test.sh install.sh
+          docker run --rm -v "$PWD:/src:ro" alpine:3.22 /bin/sh -c 'apk add --no-cache curl >/dev/null && sh /src/.github/tests/installer-checksum-test.sh /src/install.sh'
           CGO_ENABLED=0 go build -o /tmp/coradectl ./cmd/xbctl
           docker run --rm -v "$PWD:/src:ro" alpine:3.22 /bin/sh -n /src/install.sh
           docker run --rm -v "$PWD:/src:ro" alpine:3.22 /bin/sh -n /src/time-sync-check.sh
