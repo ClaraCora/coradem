@@ -14,6 +14,11 @@ import (
 const (
 	upgradeStateFileName  = "agent-upgrade-state.json"
 	upgradeResultFileName = "agent-upgrade-result"
+	// Keep this below the control-plane timeout so an upgrade that never
+	// produces a result is reported as failed before the panel marks it stale.
+	// This also prevents an acknowledged task from remaining in "upgrading"
+	// forever when the installer or init system exits unexpectedly.
+	upgradePendingResultTimeout = 12 * time.Minute
 )
 
 type upgradeState struct {
@@ -25,9 +30,10 @@ type upgradeState struct {
 }
 
 type upgradeResult struct {
-	TaskID string
-	Status string
-	Code   int
+	TaskID  string
+	Status  string
+	Code    int
+	Message string
 }
 
 func upgradeStatePath(configDir string) string {
@@ -36,6 +42,10 @@ func upgradeStatePath(configDir string) string {
 
 func upgradeResultPath(statePath string) string {
 	return filepath.Join(filepath.Dir(statePath), upgradeResultFileName)
+}
+
+func upgradeErrorPath(resultPath string) string {
+	return resultPath + ".error"
 }
 
 func loadUpgradeState(path string) (upgradeState, error) {
@@ -109,6 +119,9 @@ func loadUpgradeResult(path string) (upgradeResult, error) {
 	if err != nil {
 		return upgradeResult{}, err
 	}
+	if len(data) > 1024 {
+		return upgradeResult{}, errors.New("Agent upgrade result is too large")
+	}
 	fields := strings.Fields(string(data))
 	if len(fields) != 3 || sanitizeUnitSuffix(fields[0]) != fields[0] {
 		return upgradeResult{}, errors.New("Agent upgrade result is invalid")
@@ -120,14 +133,25 @@ func loadUpgradeResult(path string) (upgradeResult, error) {
 	if err != nil || code < 0 || code > 255 {
 		return upgradeResult{}, errors.New("Agent upgrade result has an invalid exit code")
 	}
-	return upgradeResult{TaskID: fields[0], Status: fields[1], Code: code}, nil
+	result := upgradeResult{TaskID: fields[0], Status: fields[1], Code: code}
+	if message, messageErr := os.ReadFile(upgradeErrorPath(path)); messageErr == nil {
+		if len(message) > 4096 {
+			message = message[:4096]
+		}
+		result.Message = strings.TrimSpace(string(message))
+	}
+	return result, nil
 }
 
 func versionsEqual(current, target string) bool {
 	normalize := func(value string) string {
 		value = strings.ToLower(strings.TrimSpace(value))
 		value = strings.TrimPrefix(value, "corade-")
-		return strings.TrimPrefix(value, "v")
+		value = strings.TrimPrefix(value, "v")
+		if index := strings.IndexByte(value, '+'); index >= 0 {
+			value = value[:index]
+		}
+		return value
 	}
 	return normalize(current) != "" && normalize(current) == normalize(target)
 }

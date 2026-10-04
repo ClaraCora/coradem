@@ -179,10 +179,13 @@ stage_artifacts() {
     [ -f "$BINARY_SOURCE" ] || fail "binary not found: $BINARY_SOURCE"
     cp "$BINARY_SOURCE" "$STAGED_BINARY"
   else
+    # Build metadata is displayed by the panel but is not part of the GitHub
+    # release tag (for example v2.0.5+d9c44b9 -> corade-v2.0.5).
+    release_version=${VERSION%%+*}
     case "$VERSION" in
       latest) release_tag="corade-latest" ;;
-      corade-*) release_tag="$VERSION" ;;
-      *) release_tag="corade-${VERSION}" ;;
+      corade-*) release_tag="${release_version}" ;;
+      *) release_tag="corade-${release_version}" ;;
     esac
     base_url="https://github.com/${REPOSITORY}/releases/download/${release_tag}"
     log "downloading ${REPOSITORY} release ${VERSION}"

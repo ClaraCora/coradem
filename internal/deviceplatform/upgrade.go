@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	agentUpgradeScriptPrefix = `set -eu; upgrade_script=$(mktemp); trap "rm -f \"$upgrade_script\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ClaraCora/CPP/main/corade-install.sh -o "$upgrade_script"; /bin/sh "$upgrade_script"`
+	agentUpgradeScriptPrefix = `upgrade_script=$(mktemp) || exit $?; trap "rm -f \"$upgrade_script\"" EXIT; curl -fsSL https://raw.githubusercontent.com/ClaraCora/CPP/main/corade-install.sh -o "$upgrade_script" || exit $?; /bin/sh "$upgrade_script"`
 	upgradeLogDir            = "/var/log/corade"
 	upgradeLogPath           = "/var/log/corade/upgrade.log"
 )
@@ -35,10 +35,8 @@ func scheduleAgentUpgrade(ctx context.Context, taskID, targetVersion, statePath 
 	if err != nil {
 		return err
 	}
-	if initSystem == upgradeOpenRC {
-		if err := os.MkdirAll(upgradeLogDir, 0o750); err != nil {
-			return fmt.Errorf("create upgrade log directory: %w", err)
-		}
+	if err := os.MkdirAll(upgradeLogDir, 0o750); err != nil {
+		return fmt.Errorf("create upgrade log directory: %w", err)
 	}
 
 	command := buildUpgradeCommand(ctx, initSystem, unitSuffix, targetVersion, taskID, upgradeResultPath(statePath))
@@ -81,6 +79,8 @@ func buildUpgradeCommand(ctx context.Context, initSystem upgradeInitSystem, unit
 			"--property=Type=oneshot",
 			"--collect",
 			"--no-block",
+			"--property=StandardOutput=append:"+upgradeLogPath,
+			"--property=StandardError=append:"+upgradeLogPath,
 			"/bin/sh", "-c", script,
 		)
 	}
@@ -102,11 +102,20 @@ func buildUpgradeScript(targetVersion, taskID, resultPath string) string {
 	// The installer stops and restarts this Agent. The detached shell therefore
 	// records its terminal result on disk so either the current process (failure)
 	// or the replacement process (success) can report it to CPanel.
-	return "result_status=succeeded; result_code=0; if " + installer +
-		"; then :; else result_code=$?; result_status=failed; fi; " +
-		"umask 077; result_tmp=" + shellQuote(resultPath) + ".$$; " +
+	resultErrorPath := upgradeErrorPath(resultPath)
+	return "umask 077; mkdir -p " + shellQuote(upgradeLogDir) + " 2>/dev/null || true; " +
+		"printf '%s\n' " + shellQuote("Corade Agent upgrade started: task="+taskID+" target="+targetVersion) + "; " +
+		"rm -f " + shellQuote(resultPath) + " " + shellQuote(resultErrorPath) + "; " +
+		"output_file=$(mktemp) || { printf '%s failed 125\n' " + shellQuote(taskID) + " >" + shellQuote(resultPath) + " 2>/dev/null || true; printf '%s' 'could not create upgrade output file' >" + shellQuote(resultErrorPath) + " 2>/dev/null || true; exit 125; }; trap 'rm -f \"$output_file\"' EXIT; " +
+		"result_status=succeeded; result_code=0; if /bin/sh -c " + shellQuote(installer) + " >\"$output_file\" 2>&1; then :; else result_code=$?; result_status=failed; fi; " +
+		"if [ \"$result_status\" = failed ]; then " +
+		"message_tmp=" + shellQuote(resultErrorPath) + ".$$; " +
+		"tail -c 1800 \"$output_file\" 2>/dev/null | tr '\\r\\n' ' ' >\"$message_tmp\" || true; " +
+		"if [ ! -s \"$message_tmp\" ]; then printf '%s' \"upgrade installer exited with status $result_code without diagnostic output\" >\"$message_tmp\"; fi; " +
+		"mv \"$message_tmp\" " + shellQuote(resultErrorPath) + " 2>/dev/null || { cat \"$message_tmp\" >" + shellQuote(resultErrorPath) + " 2>/dev/null || true; rm -f \"$message_tmp\"; }; " +
+		"fi; result_tmp=" + shellQuote(resultPath) + ".$$; " +
 		"printf '%s %s %s\\n' " + shellQuote(taskID) + " \"$result_status\" \"$result_code\" >\"$result_tmp\"; " +
-		"mv \"$result_tmp\" " + shellQuote(resultPath) + "; exit \"$result_code\""
+		"mv \"$result_tmp\" " + shellQuote(resultPath) + " 2>/dev/null || { cat \"$result_tmp\" >" + shellQuote(resultPath) + " 2>/dev/null || true; rm -f \"$result_tmp\"; }; exit \"$result_code\""
 }
 
 // Upgrade versions become shell arguments in a detached command. Keep the

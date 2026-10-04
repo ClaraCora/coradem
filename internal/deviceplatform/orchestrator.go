@@ -480,6 +480,21 @@ func (o *Orchestrator) failUpgrade(ctx context.Context, taskID, message string) 
 	_ = os.Remove(o.upgradeStatePath)
 }
 
+func classifyUpgradeResult(state upgradeState, result upgradeResult, currentVersion string) (string, string) {
+	status := result.Status
+	message := ""
+	if status == "succeeded" && state.TargetVersion != "" && !targetVersionMatches(currentVersion, state.TargetVersion) {
+		return "failed", fmt.Sprintf("Agent reported version %q, target was %q", currentVersion, state.TargetVersion)
+	}
+	if status == "failed" {
+		message = strings.TrimSpace(result.Message)
+		if message == "" {
+			message = fmt.Sprintf("upgrade command exited with status %d", result.Code)
+		}
+	}
+	return status, message
+}
+
 func (o *Orchestrator) reportPendingUpgrade(ctx context.Context) {
 	state, err := loadUpgradeState(o.upgradeStatePath)
 	if err != nil {
@@ -490,27 +505,27 @@ func (o *Orchestrator) reportPendingUpgrade(ctx context.Context) {
 	}
 	result, resultErr := loadUpgradeResult(upgradeResultPath(o.upgradeStatePath))
 	if resultErr == nil && result.TaskID == state.TaskID {
-		message := ""
-		status := result.Status
-		if status == "succeeded" && state.TargetVersion != "" && !targetVersionMatches(o.version, state.TargetVersion) {
-			status = "failed"
-			message = fmt.Sprintf("Agent reported version %q, target was %q", o.version, state.TargetVersion)
-		} else if status == "failed" {
-			message = fmt.Sprintf("upgrade command exited with status %d", result.Code)
-		}
+		status, message := classifyUpgradeResult(state, result, o.version)
 		if err := o.sendUpgradeResult(ctx, state.TaskID, status, o.version, message); err != nil {
 			nlog.Core().Warn("report Agent upgrade result", "task_id", state.TaskID, "status", status, "error", err)
 			return
 		}
 		_ = os.Remove(upgradeResultPath(o.upgradeStatePath))
+		_ = os.Remove(upgradeErrorPath(upgradeResultPath(o.upgradeStatePath)))
 		_ = os.Remove(o.upgradeStatePath)
 		return
 	}
-	if state.Status == "acknowledged" && state.TargetVersion != "" && targetVersionMatches(o.version, state.TargetVersion) {
-		if err := o.sendUpgradeResult(ctx, state.TaskID, "succeeded", o.version, ""); err != nil {
-			nlog.Core().Warn("report inferred Agent upgrade success", "task_id", state.TaskID, "error", err)
+	// A result file that exists but cannot be parsed is terminal as well. Do
+	// not keep retrying ACKs: report the parser error so the panel exposes the
+	// actual recovery hint instead of a generic "upgrade command exited".
+	if resultErr != nil && !errors.Is(resultErr, os.ErrNotExist) {
+		message := fmt.Sprintf("upgrade result is unreadable: %v; inspect %s", resultErr, upgradeLogPath)
+		if err := o.sendUpgradeResult(ctx, state.TaskID, "failed", o.version, message); err != nil {
+			nlog.Core().Warn("report unreadable Agent upgrade result", "task_id", state.TaskID, "error", err)
 			return
 		}
+		_ = os.Remove(upgradeResultPath(o.upgradeStatePath))
+		_ = os.Remove(upgradeErrorPath(upgradeResultPath(o.upgradeStatePath)))
 		_ = os.Remove(o.upgradeStatePath)
 		return
 	}
@@ -523,6 +538,15 @@ func (o *Orchestrator) reportPendingUpgrade(ctx context.Context) {
 		return
 	}
 	if state.Status == "acknowledged" {
+		if !state.UpdatedAt.IsZero() && time.Since(state.UpdatedAt) >= upgradePendingResultTimeout {
+			message := fmt.Sprintf("upgrade did not produce a terminal result within %s; inspect %s", upgradePendingResultTimeout, upgradeLogPath)
+			if err := o.sendUpgradeResult(ctx, state.TaskID, "failed", o.version, message); err != nil {
+				nlog.Core().Warn("report timed out Agent upgrade", "task_id", state.TaskID, "error", err)
+				return
+			}
+			_ = os.Remove(o.upgradeStatePath)
+			return
+		}
 		if err := o.sendUpgradeResult(ctx, state.TaskID, "acknowledged", "", ""); err != nil {
 			nlog.Core().Warn("retry Agent upgrade acknowledgement", "task_id", state.TaskID, "error", err)
 		}
